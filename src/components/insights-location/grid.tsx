@@ -1,4 +1,4 @@
-import { ColDef, ModuleRegistry, StateUpdatedEvent, AllCommunityModule, themeQuartz, IAggFuncParams, IHeaderParams, ITooltipParams } from 'ag-grid-community'
+import { ColDef, ModuleRegistry, StateUpdatedEvent, AllCommunityModule, themeQuartz, IAggFuncParams, IHeaderParams, ITooltipParams, IRowNode } from 'ag-grid-community'
 import { LicenseManager, AllEnterpriseModule, IntegratedChartsModule } from 'ag-grid-enterprise'
 import { useMemo, useCallback, useRef, useEffect, KeyboardEventHandler } from 'react'
 import { AgChartsEnterpriseModule } from "ag-charts-enterprise"
@@ -74,7 +74,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
   }
 
   // Retool state outputs
-  const [currentGridState, setCurrentGridState] = Retool.useStateObject({ name: "currentGridState", inspector: "hidden", initialValue: {} })
+  const [, setCurrentGridState] = Retool.useStateObject({ name: "currentGridState", inspector: "hidden", initialValue: {} })
 
   // Reference to the AG Grid table
   const gridRef = useRef<AgGridReact<LocationRow>>(null);
@@ -146,39 +146,111 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
     return pointsMap
   }, [getLookupKeys, rowData])
 
-  const supportCountByKey = useMemo(() => {
-    const countMap = new Map<string, number>()
+  const getSupportScopeMetrics = useCallback((node?: IRowNode<LocationRow>) => {
+    if (!node) return null
 
-    for (const row of rowData) {
-      if (String(row.laborType ?? '').trim().toLowerCase() !== 'support') continue
+    let scopeNode: IRowNode<LocationRow> | null | undefined = node.parent
+    while (scopeNode) {
+      const scopedLeaves = scopeNode.allLeafChildren ?? []
+      if (scopedLeaves.length > 0) {
+        let directPoints = 0
+        let supportCount = 0
 
-      const keys = getLookupKeys(row)
-      for (const key of keys) {
-        countMap.set(key, (countMap.get(key) || 0) + 1)
+        for (const leaf of scopedLeaves) {
+          const data = leaf.data as LocationRow | undefined
+          if (!data) continue
+
+          const laborType = String(data.laborType ?? '').trim().toLowerCase()
+          if (laborType === 'direct') directPoints += Number(data.points) || 0
+          if (laborType === 'support') supportCount += 1
+        }
+
+        if (directPoints > 0 && supportCount > 0) {
+          return { directPoints, supportCount }
+        }
       }
+
+      scopeNode = scopeNode.parent
     }
 
-    return countMap
-  }, [getLookupKeys, rowData])
+    return null
+  }, [])
 
-  const getEffectivePoints = useCallback((row?: LocationRow) => {
+  const isUnderSupportGroup = useCallback((node?: IRowNode<LocationRow>) => {
+    let cursor: IRowNode<LocationRow> | null | undefined = node
+    while (cursor && cursor.level >= 0) {
+      const field = String(cursor.rowGroupColumn?.getColId?.() ?? '')
+      const key = String(cursor.key ?? '').trim().toLowerCase()
+      if (field === 'laborType' && key === 'support') return true
+      cursor = cursor.parent
+    }
+    return false
+  }, [])
+
+  const getDirectPointsByGroupPath = useCallback((node?: IRowNode<LocationRow>) => {
+    if (!node) return null
+
+    let rootNode: IRowNode<LocationRow> = node
+    while (rootNode.parent && rootNode.parent.level >= 0) {
+      rootNode = rootNode.parent
+    }
+
+    const criteria: Array<{ field: string; key: string }> = []
+    let cursor: IRowNode<LocationRow> | null | undefined = node
+    while (cursor && cursor.level >= 0) {
+      const field = String(cursor.rowGroupColumn?.getColId?.() ?? '')
+      const key = String(cursor.key ?? '').trim().toLowerCase()
+      if (field && key && field !== 'laborType') {
+        criteria.push({ field, key })
+      }
+      cursor = cursor.parent
+    }
+
+    let directPoints = 0
+    for (const leaf of rootNode.allLeafChildren ?? []) {
+      const data = leaf.data as LocationRow | undefined
+      if (!data) continue
+      if (String(data.laborType ?? '').trim().toLowerCase() !== 'direct') continue
+
+      const values = data as unknown as Record<string, unknown>
+      const matches = criteria.every(({ field, key }) => {
+        const rawValue = values[field]
+        if (rawValue == null) return false
+        const normalizedValue = typeof rawValue === 'string'
+          ? rawValue.trim().toLowerCase()
+          : String(rawValue).trim().toLowerCase()
+        return normalizedValue === key
+      })
+
+      if (matches) directPoints += Number(data.points) || 0
+    }
+
+    return directPoints
+  }, [])
+
+  const getEffectivePoints = useCallback((row?: LocationRow, node?: IRowNode<LocationRow>, contextNode?: IRowNode<LocationRow>) => {
     if (!row) return 0
 
     const currentPoints = Number(row.points) || 0
     const laborType = String(row.laborType ?? '').trim().toLowerCase()
     if (laborType !== 'support') return currentPoints
 
+    const pathDirectPoints = getDirectPointsByGroupPath(node) ?? getDirectPointsByGroupPath(contextNode)
+    if (pathDirectPoints != null) return pathDirectPoints
+
+    const scopeMetrics = getSupportScopeMetrics(node) ?? getSupportScopeMetrics(contextNode)
+    if (scopeMetrics && scopeMetrics.supportCount > 0) return scopeMetrics.directPoints
+
     const keys = getLookupKeys(row)
     for (const key of keys) {
       const directPoints = directPointsByKey.get(key)
       if (directPoints == null) continue
 
-      const supportCount = supportCountByKey.get(key) || 1
-      return directPoints / supportCount
+      return directPoints
     }
 
     return currentPoints
-  }, [directPointsByKey, getLookupKeys, supportCountByKey])
+  }, [directPointsByKey, getDirectPointsByGroupPath, getLookupKeys, getSupportScopeMetrics])
 
   const getSupportGoalPPH = useCallback((row?: LocationRow) => {
     if (!row) return 0
@@ -207,6 +279,11 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
 
     return 0
   }, [getSupportGoalPPH])
+
+  const getGoalRateMPP = useCallback((row?: LocationRow) => {
+    const goalRateSPP = getGoalRateSPP(row)
+    return goalRateSPP > 0 ? goalRateSPP / 60 : 0
+  }, [getGoalRateSPP])
 
   const getGoalStatusStyle = useCallback((isMeetingGoal: boolean | null) => {
     if (isMeetingGoal == null) return undefined
@@ -268,7 +345,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       if (!key) continue
 
       const laborType = String(data.laborType ?? '').trim().toLowerCase()
-      const points = getEffectivePoints(data)
+      const points = getEffectivePoints(data, leaf as IRowNode<LocationRow>, params.rowNode as IRowNode<LocationRow> | undefined)
       const hours = Number(data.hours) || 0
       const goalRateSPP = getGoalRateSPP(data)
       const goalHours = points > 0 ? (goalRateSPP * points) / 3600 : 0
@@ -292,9 +369,9 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
         bucket.directHours += hours
         bucket.directGoalHours += goalHours
       } else if (laborType === 'support') {
-        bucket.supportPoints += points
+        bucket.supportPoints = Math.max(bucket.supportPoints, points)
         bucket.supportHours += hours
-        bucket.supportGoalHours += goalHours
+        bucket.supportGoalHours = Math.max(bucket.supportGoalHours, goalHours)
       } else if (laborType === 'total') {
         bucket.totalPoints += points
         bucket.totalHours += hours
@@ -312,7 +389,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
     let hours = 0
     let goalHours = 0
     for (const bucket of sumsByKey.values()) {
-      const pointsValue = Math.max(bucket.directPoints, bucket.supportPoints, bucket.totalPoints) + bucket.otherPoints
+      const pointsValue = bucket.directPoints
       const hoursValue = Math.max(bucket.totalHours, bucket.directHours + bucket.supportHours) + bucket.otherHours
       const goalHoursValue = Math.max(bucket.totalGoalHours, bucket.directGoalHours + bucket.supportGoalHours) + bucket.otherGoalHours
 
@@ -321,12 +398,16 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       goalHours += goalHoursValue
     }
 
+    const supportPathDirectPoints = isUnderSupportGroup(params.rowNode as IRowNode<LocationRow> | undefined)
+      ? getDirectPointsByGroupPath(params.rowNode as IRowNode<LocationRow> | undefined)
+      : null
+
     return {
-      points,
+      points: supportPathDirectPoints ?? points,
       hours,
       goalHours
     }
-  }, [buildPointsKey, getEffectivePoints, getGoalRateSPP])
+  }, [buildPointsKey, getDirectPointsByGroupPath, getEffectivePoints, getGoalRateSPP, isUnderSupportGroup])
 
   const pointsAggregation = useCallback((params: IAggFuncParams) => {
     return aggregateMetrics(params).points
@@ -356,6 +437,16 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
     return points > 0 ? (goalHours * 3600) / points : 0
   }, [aggregateMetrics])
 
+  const actualRateMinPPAggregation = useCallback((params: IAggFuncParams) => {
+    const { points, hours } = aggregateMetrics(params)
+    return points > 0 ? (hours * 60) / points : 0
+  }, [aggregateMetrics])
+
+  const goalRateMinPPAggregation = useCallback((params: IAggFuncParams) => {
+    const { points, goalHours } = aggregateMetrics(params)
+    return points > 0 ? (goalHours * 60) / points : 0
+  }, [aggregateMetrics])
+
   const goalRatePPHAggregation = useCallback((params: IAggFuncParams) => {
     const { points, goalHours } = aggregateMetrics(params)
     return goalHours > 0 ? points / goalHours : 0
@@ -381,8 +472,8 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
     return num.toFixed(digits)
   }, [])
 
-  const getLeafGoalHours = useCallback((row?: LocationRow) => {
-    const points = getEffectivePoints(row)
+  const getLeafGoalHours = useCallback((row?: LocationRow, node?: IRowNode<LocationRow>) => {
+    const points = getEffectivePoints(row, node)
     const goalRateSPP = getGoalRateSPP(row)
     return points > 0 ? (goalRateSPP * points) / 3600 : 0
   }, [getEffectivePoints, getGoalRateSPP])
@@ -499,7 +590,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       tooltipValueGetter: (params: ITooltipParams<LocationRow>) => {
         const laborType = String(params.data?.laborType ?? '')
         if (laborType.toLowerCase() === 'direct') return 'Direct: point-generating operational work.'
-        if (laborType.toLowerCase() === 'support') return 'Support: indirect/admin work. Points are aligned to Direct points at aggregate level.'
+        if (laborType.toLowerCase() === 'support') return 'Support: indirect/admin work. Direct points are distributed across support rows within the current grouping scope.'
         if (laborType.toLowerCase() === 'gap') return 'Gap: non-assignment/gap time.'
         return laborType || 'Labor type'
       }
@@ -577,7 +668,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       allowedAggFuncs: ['pointsAggregation'],
       aggFunc: 'pointsAggregation',
       enableValue: true,
-      valueGetter: params => getEffectivePoints(params.data),
+      valueGetter: params => getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined),
       valueFormatter: params => params.value && params.value.toFixed(0),
       tooltipValueGetter: (params: ITooltipParams<LocationRow>) => {
         const effectivePoints = Number(params.value ?? 0)
@@ -610,7 +701,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
           : Number(params.data?.hours ?? 0)
         const points = params.node?.group
           ? Number((params.node.aggData?.actualRateMPP as { points?: number } | undefined)?.points ?? 0)
-          : getEffectivePoints(params.data)
+          : getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined)
         const goal = params.node?.group
           ? Number(params.node.aggData?.goalRateSPP ?? 0)
           : getGoalRateSPP(params.data)
@@ -622,7 +713,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
         if (!(params.node && params.node.group)) {
 
           const hours = Number(params.data?.hours) || 0
-          const points = getEffectivePoints(params.data)
+          const points = getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined)
 
           const value = points > 0
             ? (hours * 3600) / points
@@ -641,7 +732,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
         if (!(params.node && params.node.group)) {
 
           const hours = Number(params.data?.hours) || 0
-          const points = getEffectivePoints(params.data)
+          const points = getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined)
 
           const value = points > 0
             ? (hours * 3600) / points
@@ -689,6 +780,48 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
     },
 
     {
+      colId: 'actualRateMinPP',
+      headerName: 'Actual Rate (MPP)',
+      headerComponent: HeaderWithCaption,
+      headerComponentParams: { caption: 'Minutes per point' },
+      autoHeaderHeight: true,
+      headerTooltip: "Actual minutes per point. Lower is better.\nFormula: (Actual Hours * 60) / Points",
+      filter: 'agNumberColumnFilter',
+      allowedAggFuncs: ['actualRateMinPPAggregation'],
+      aggFunc: 'actualRateMinPPAggregation',
+      enableValue: true,
+      cellStyle: params => {
+        const actualValue = Number(params.value ?? 0)
+        const goalValue = params.node?.group
+          ? Number(params.node.aggData?.goalRateMinPP ?? 0)
+          : getGoalRateMPP(params.data)
+        if (goalValue <= 0) return undefined
+        return getGoalStatusStyle(actualValue <= goalValue)
+      },
+      valueGetter: (params) => {
+        const hours = Number(params.data?.hours) || 0
+        const points = getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined)
+        return points > 0 ? (hours * 60) / points : 0
+      },
+      valueFormatter: params => Number(params.value || 0).toFixed(2)
+    },
+
+    {
+      colId: 'goalRateMinPP',
+      headerName: 'Goal Rate (MPP)',
+      headerComponent: HeaderWithCaption,
+      headerComponentParams: { caption: 'Target minutes per point' },
+      autoHeaderHeight: true,
+      headerTooltip: "Target minutes per point for the row.",
+      filter: 'agNumberColumnFilter',
+      allowedAggFuncs: ['goalRateMinPPAggregation'],
+      aggFunc: 'goalRateMinPPAggregation',
+      enableValue: true,
+      valueGetter: params => getGoalRateMPP(params.data),
+      valueFormatter: params => Number(params.value || 0).toFixed(2)
+    },
+
+    {
       colId: 'actualPPH',
       headerName: 'Actual Rate (PPH)',
       headerComponent: HeaderWithCaption,
@@ -701,7 +834,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       enableValue: true,
       cellStyle: params => getGoalStatusStyle(isMeetingGoalPPH(params)),
       valueGetter: (params) => {
-        const points = getEffectivePoints(params.data)
+        const points = getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined)
         const hours = Number(params.data?.hours) || 0
         return hours > 0 ? points / hours : 0
       },
@@ -709,7 +842,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       tooltipValueGetter: (params: ITooltipParams<LocationRow>) => {
         const rate = Number(params.value ?? 0)
         const hours = params.node?.group ? Number(params.node.aggData?.hours ?? 0) : Number(params.data?.hours ?? 0)
-        const points = params.node?.group ? Number(params.node.aggData?.points ?? 0) : getEffectivePoints(params.data)
+        const points = params.node?.group ? Number(params.node.aggData?.points ?? 0) : getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined)
         const goal = params.node?.group ? Number(params.node.aggData?.goalRatePPH ?? 0) : getGoalRatePPH(params.data)
         const status = goal > 0 ? (rate >= goal ? 'Meeting goal' : 'Below goal') : 'No goal set'
         return `Actual Rate (PPH): ${formatNumber(rate)}\nFormula: ${formatNumber(points)} pts / ${formatNumber(hours)} hrs\nGoal (PPH): ${formatNumber(goal)}\nStatus: ${status}`
@@ -743,7 +876,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       valueFormatter: params => params.value && params.value.toFixed(2),
       tooltipValueGetter: (params: ITooltipParams<LocationRow>) => {
         const actualHours = Number(params.value ?? 0)
-        const goalHours = params.node?.group ? Number(params.node.aggData?.goalHours ?? 0) : getLeafGoalHours(params.data)
+        const goalHours = params.node?.group ? Number(params.node.aggData?.goalHours ?? 0) : getLeafGoalHours(params.data, params.node as IRowNode<LocationRow> | undefined)
         const delta = goalHours - actualHours
         return `Actual Hours: ${formatNumber(actualHours)}\nGoal Hours: ${formatNumber(goalHours)}\nDelta (Goal - Actual): ${formatNumber(delta)}`
       }
@@ -761,14 +894,14 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       aggFunc: 'goalHoursAggregation',
       enableValue: true,
       valueGetter: (params) => {
-        const points = getEffectivePoints(params.data)
+        const points = getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined)
         const goalRateSPP = getGoalRateSPP(params.data)
         return points > 0 ? (goalRateSPP * points) / 3600 : 0
       },
       valueFormatter: params => Number(params.value || 0).toFixed(2),
       tooltipValueGetter: (params: ITooltipParams<LocationRow>) => {
         const goalHours = Number(params.value ?? 0)
-        const points = params.node?.group ? Number(params.node.aggData?.points ?? 0) : getEffectivePoints(params.data)
+        const points = params.node?.group ? Number(params.node.aggData?.points ?? 0) : getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined)
         const goalSPP = params.node?.group ? Number(params.node.aggData?.goalRateSPP ?? 0) : getGoalRateSPP(params.data)
         return `Goal Hours: ${formatNumber(goalHours)}\nFormula: (${formatNumber(goalSPP)} SPP * ${formatNumber(points)} pts) / 3600`
       }
@@ -787,7 +920,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       enableValue: true,
       cellStyle: params => getGoalStatusStyle(Number(params.value ?? 0) >= 0),
       valueGetter: (params) => {
-        const points = getEffectivePoints(params.data)
+        const points = getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined)
         const goalRateSPP = getGoalRateSPP(params.data)
         const goalHours = points > 0 ? (goalRateSPP * points) / 3600 : 0
         const hours = Number(params.data?.hours) || 0
@@ -797,7 +930,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       tooltipValueGetter: (params: ITooltipParams<LocationRow>) => {
         const delta = Number(params.value ?? 0)
         const hours = params.node?.group ? Number(params.node.aggData?.hours ?? 0) : Number(params.data?.hours ?? 0)
-        const goalHours = params.node?.group ? Number(params.node.aggData?.goalHours ?? 0) : getLeafGoalHours(params.data)
+        const goalHours = params.node?.group ? Number(params.node.aggData?.goalHours ?? 0) : getLeafGoalHours(params.data, params.node as IRowNode<LocationRow> | undefined)
         const status = delta >= 0 ? 'Meeting goal' : 'Below goal'
         return `Hours Delta: ${formatNumber(delta)}\nFormula: ${formatNumber(goalHours)} Goal Hrs - ${formatNumber(hours)} Actual Hrs\nStatus: ${status}`
       }
@@ -816,7 +949,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       enableValue: true,
       cellStyle: params => getGoalStatusStyle(Number(params.value ?? 0) >= 100),
       valueGetter: (params) => {
-        const points = getEffectivePoints(params.data)
+        const points = getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined)
         const goalRateSPP = getGoalRateSPP(params.data)
         const goalHours = points > 0 ? (goalRateSPP * points) / 3600 : 0
         const hours = Number(params.data?.hours) || 0
@@ -826,13 +959,13 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       tooltipValueGetter: (params: ITooltipParams<LocationRow>) => {
         const pct = Number(params.value ?? 0)
         const hours = params.node?.group ? Number(params.node.aggData?.hours ?? 0) : Number(params.data?.hours ?? 0)
-        const goalHours = params.node?.group ? Number(params.node.aggData?.goalHours ?? 0) : getLeafGoalHours(params.data)
+        const goalHours = params.node?.group ? Number(params.node.aggData?.goalHours ?? 0) : getLeafGoalHours(params.data, params.node as IRowNode<LocationRow> | undefined)
         const status = pct >= 100 ? 'Meeting goal' : 'Below goal'
         return `PCT to Goal: ${formatNumber(pct)}%\nFormula: (${formatNumber(goalHours)} / ${formatNumber(hours)}) * 100\nStatus: ${status}`
       }
     },
 
-  ], [formatNumber, getEffectivePoints, getGoalRatePPH, getGoalRateSPP, getLeafGoalHours])
+  ], [formatNumber, getEffectivePoints, getGoalRateMPP, getGoalRatePPH, getGoalRateSPP, getGoalStatusStyle, getLeafGoalHours])
 
   // Adds additional defaults to each column definition
   const defaultColDef = useMemo(() => ({
@@ -851,13 +984,15 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
   const aggFuncs = useMemo(() => ({
     pointsAggregation,
     actualRateMPPAggregation,
+    actualRateMinPPAggregation,
     actualPPHAggregation,
     goalRateSPPAggregation,
+    goalRateMinPPAggregation,
     goalRatePPHAggregation,
     goalHoursAggregation,
     hoursDeltaAggregation,
     pctToGoalAggregation
-  }), [actualPPHAggregation, actualRateMPPAggregation, goalHoursAggregation, goalRatePPHAggregation, goalRateSPPAggregation, hoursDeltaAggregation, pctToGoalAggregation, pointsAggregation])
+  }), [actualPPHAggregation, actualRateMPPAggregation, actualRateMinPPAggregation, goalHoursAggregation, goalRateMinPPAggregation, goalRatePPHAggregation, goalRateSPPAggregation, hoursDeltaAggregation, pctToGoalAggregation, pointsAggregation])
 
   // Theme of the grid
   const theme = useMemo(() => themeQuartz.withParams({
@@ -870,8 +1005,19 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
   }), []);
 
   const debounceTimeoutRef = useRef<number | null>(null);
+  const stateApplyTimeoutRef = useRef<number | null>(null);
 
-  const onStateUpdated = useCallback((event: StateUpdatedEvent) => {
+  const scheduleApplyGridState = useCallback(() => {
+    if (!gridRef.current?.api) return
+    if (stateApplyTimeoutRef.current) window.clearTimeout(stateApplyTimeoutRef.current)
+
+    stateApplyTimeoutRef.current = window.setTimeout(() => {
+      if (!gridRef.current?.api || !gridState) return
+      gridRef.current.api.setState(gridState)
+    }, 0)
+  }, [gridState])
+
+  const onStateUpdated = useCallback((_event: StateUpdatedEvent) => {
 
     if (!gridRef.current) return;
     if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
@@ -881,23 +1027,28 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       setCurrentGridState(gridState as Retool.SerializableObject);
     }, 200);
     
-  }, []);
+  }, [setCurrentGridState]);
 
   const onFirstDataRendered = () => {
 
-    if (!gridRef.current?.api || !gridState) return;
-
-    gridRef.current.api.setState(gridState);
+    if (!gridRef.current?.api) return
+    scheduleApplyGridState()
 
   }
 
   useEffect(() => {
 
-    if (!gridRef.current?.api || !gridState) return;
+    if (!gridRef.current?.api) return
+    scheduleApplyGridState()
 
-    gridRef.current.api.setState(gridState);
+  }, [scheduleApplyGridState]);
 
-  }, [gridState]);
+  useEffect(() => {
+    return () => {
+      if (debounceTimeoutRef.current) window.clearTimeout(debounceTimeoutRef.current)
+      if (stateApplyTimeoutRef.current) window.clearTimeout(stateApplyTimeoutRef.current)
+    }
+  }, [])
 
   return (
     <section className={styles.container}>
