@@ -165,7 +165,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
           if (laborType === 'support') supportCount += 1
         }
 
-        if (directPoints > 0 && supportCount > 0) {
+        if (directPoints > 0) {
           return { directPoints, supportCount }
         }
       }
@@ -179,12 +179,62 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
   const isUnderSupportGroup = useCallback((node?: IRowNode<LocationRow>) => {
     let cursor: IRowNode<LocationRow> | null | undefined = node
     while (cursor && cursor.level >= 0) {
-      const field = String(cursor.rowGroupColumn?.getColId?.() ?? '')
       const key = String(cursor.key ?? '').trim().toLowerCase()
-      if (field === 'laborType' && key === 'support') return true
+      if (key === 'support') return true
       cursor = cursor.parent
     }
     return false
+  }, [])
+
+  const getSiblingDirectGroupPoints = useCallback((node?: IRowNode<LocationRow>) => {
+    if (!node) return null
+
+    let cursor: IRowNode<LocationRow> | null | undefined = node
+    while (cursor && cursor.parent) {
+      const siblings = cursor.parent.childrenAfterGroup ?? []
+      for (const sibling of siblings) {
+        const siblingKey = String(sibling.key ?? '').trim().toLowerCase()
+        if (siblingKey !== 'direct') continue
+
+        const siblingPoints = Number(sibling.aggData?.points ?? 0)
+        if (siblingPoints > 0) return siblingPoints
+      }
+      cursor = cursor.parent
+    }
+
+    return null
+  }, [])
+
+  const getSupportAncestorPoints = useCallback((node?: IRowNode<LocationRow>) => {
+    let cursor: IRowNode<LocationRow> | null | undefined = node
+    while (cursor && cursor.level >= 0) {
+      const key = String(cursor.key ?? '').trim().toLowerCase()
+      if (key === 'support') {
+        const points = Number(cursor.aggData?.points ?? 0)
+        if (points > 0) return points
+      }
+      cursor = cursor.parent
+    }
+    return null
+  }, [])
+
+  const getAncestorDirectLeafPoints = useCallback((node?: IRowNode<LocationRow>) => {
+    let cursor: IRowNode<LocationRow> | null | undefined = node
+    while (cursor && cursor.level >= 0) {
+      const scopedLeaves = cursor.allLeafChildren ?? []
+      if (scopedLeaves.length > 0) {
+        let directPoints = 0
+        for (const leaf of scopedLeaves) {
+          const data = leaf.data as LocationRow | undefined
+          if (!data) continue
+          if (String(data.laborType ?? '').trim().toLowerCase() !== 'direct') continue
+          directPoints += Number(data.points) || 0
+        }
+        if (directPoints > 0) return directPoints
+      }
+      cursor = cursor.parent
+    }
+    return null
   }, [])
 
   const getDirectPointsByGroupPath = useCallback((node?: IRowNode<LocationRow>) => {
@@ -233,10 +283,20 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
 
     const currentPoints = Number(row.points) || 0
     const laborType = String(row.laborType ?? '').trim().toLowerCase()
-    if (laborType !== 'support') return currentPoints
+    const supportByGroup = isUnderSupportGroup(node) || isUnderSupportGroup(contextNode)
+    if (laborType !== 'support' && !supportByGroup) return currentPoints
+
+    const ancestorDirectPoints = getAncestorDirectLeafPoints(node) ?? getAncestorDirectLeafPoints(contextNode)
+    if (ancestorDirectPoints != null) return ancestorDirectPoints
+
+    const supportAncestorPoints = getSupportAncestorPoints(node) ?? getSupportAncestorPoints(contextNode)
+    if (supportAncestorPoints != null) return supportAncestorPoints
+
+    const siblingDirectPoints = getSiblingDirectGroupPoints(node) ?? getSiblingDirectGroupPoints(contextNode)
+    if (siblingDirectPoints != null) return siblingDirectPoints
 
     const pathDirectPoints = getDirectPointsByGroupPath(node) ?? getDirectPointsByGroupPath(contextNode)
-    if (pathDirectPoints != null) return pathDirectPoints
+    if (pathDirectPoints != null && pathDirectPoints > 0) return pathDirectPoints
 
     const scopeMetrics = getSupportScopeMetrics(node) ?? getSupportScopeMetrics(contextNode)
     if (scopeMetrics && scopeMetrics.supportCount > 0) return scopeMetrics.directPoints
@@ -250,7 +310,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
     }
 
     return currentPoints
-  }, [directPointsByKey, getDirectPointsByGroupPath, getLookupKeys, getSupportScopeMetrics])
+  }, [directPointsByKey, getAncestorDirectLeafPoints, getDirectPointsByGroupPath, getLookupKeys, getSiblingDirectGroupPoints, getSupportAncestorPoints, getSupportScopeMetrics, isUnderSupportGroup])
 
   const getSupportGoalPPH = useCallback((row?: LocationRow) => {
     if (!row) return 0
@@ -399,15 +459,15 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
     }
 
     const supportPathDirectPoints = isUnderSupportGroup(params.rowNode as IRowNode<LocationRow> | undefined)
-      ? getDirectPointsByGroupPath(params.rowNode as IRowNode<LocationRow> | undefined)
+      ? (getAncestorDirectLeafPoints(params.rowNode as IRowNode<LocationRow> | undefined) ?? null)
       : null
 
     return {
-      points: supportPathDirectPoints ?? points,
+      points: supportPathDirectPoints != null && supportPathDirectPoints > 0 ? supportPathDirectPoints : points,
       hours,
       goalHours
     }
-  }, [buildPointsKey, getDirectPointsByGroupPath, getEffectivePoints, getGoalRateSPP, isUnderSupportGroup])
+  }, [buildPointsKey, getAncestorDirectLeafPoints, getEffectivePoints, getGoalRateSPP, isUnderSupportGroup])
 
   const pointsAggregation = useCallback((params: IAggFuncParams) => {
     return aggregateMetrics(params).points
