@@ -37,6 +37,7 @@ export type AdvancedRow = {
 export type AdvancedInsightsGridProps = {
   rowData: AdvancedRow[]
   gridState: GridState
+  agGridLicenseKey?: string
   setState?: (updates: Retool.SerializableObject) => void
 }
 
@@ -69,6 +70,7 @@ export type ActionRow = {
 export type ActionInsightsGridProps = {
   rowData: ActionRow[]
   gridState: GridState
+  agGridLicenseKey?: string
   setState?: (updates: Retool.SerializableObject) => void
 }
 

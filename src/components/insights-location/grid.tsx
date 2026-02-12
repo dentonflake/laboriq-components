@@ -1,12 +1,44 @@
 import { ColDef, ModuleRegistry, StateUpdatedEvent, AllCommunityModule, themeQuartz, IAggFuncParams, IHeaderParams, ITooltipParams, IRowNode } from 'ag-grid-community'
 import { LicenseManager, AllEnterpriseModule, IntegratedChartsModule } from 'ag-grid-enterprise'
-import { useMemo, useCallback, useRef, useEffect, KeyboardEventHandler } from 'react'
+import { useMemo, useCallback, useRef, useEffect, useState, KeyboardEventHandler } from 'react'
 import { AgChartsEnterpriseModule } from "ag-charts-enterprise"
 import { Retool } from '@tryretool/custom-component-support'
 import { AgGridReact } from 'ag-grid-react'
 
 import styles from '../../styles/insights.module.css'
 import { LocationRow, LocationInsightsGridProps } from '../../utils/types'
+
+let appliedAgGridLicenseKey: string | null = null
+let hasWarnedMissingAgGridLicense = false
+let hasRegisteredAgGridModules = false
+
+const applyAgGridLicense = (rawLicenseKey?: string) => {
+  const licenseKey = String(rawLicenseKey ?? '').trim()
+
+  if (licenseKey) {
+    if (appliedAgGridLicenseKey !== licenseKey) {
+      LicenseManager.setLicenseKey(licenseKey)
+      appliedAgGridLicenseKey = licenseKey
+    }
+    hasWarnedMissingAgGridLicense = false
+    return
+  }
+
+  if (!hasWarnedMissingAgGridLicense) {
+    console.warn('AG Grid License Key not provided. Please set the "agGridLicenseKey" state variable to enable enterprise features.')
+    hasWarnedMissingAgGridLicense = true
+  }
+}
+
+const ensureAgGridInitialized = (rawLicenseKey?: string) => {
+  // Enforce order: license first, modules second.
+  applyAgGridLicense(rawLicenseKey)
+
+  if (!hasRegisteredAgGridModules) {
+    ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule, IntegratedChartsModule.with(AgChartsEnterpriseModule)])
+    hasRegisteredAgGridModules = true
+  }
+}
 
 type HeaderWithCaptionProps = IHeaderParams & {
   caption?: string
@@ -65,14 +97,7 @@ const RichTooltip = (props: ITooltipParams<LocationRow>) => {
 
 const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: LocationInsightsGridProps) => {
   const ENABLE_TOOLTIPS = false
-
-  ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule, IntegratedChartsModule.with(AgChartsEnterpriseModule)])
-
-  if (agGridLicenseKey) {
-    LicenseManager.setLicenseKey(agGridLicenseKey)
-  } else {
-    console.warn('AG Grid License Key not provided. Please set the "agGridLicenseKey" state variable to enable enterprise features.')
-  }
+  const [gridInitialized, setGridInitialized] = useState(false)
 
   // Retool state outputs
   const [, setCurrentGridState] = Retool.useStateObject({ name: "currentGridState", inspector: "hidden", initialValue: {} })
@@ -82,6 +107,11 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
   const effectivePointsCacheRef = useRef<WeakMap<IRowNode<LocationRow>, number>>(new WeakMap())
   const ancestorDirectPointsCacheRef = useRef<WeakMap<IRowNode<LocationRow>, number | null>>(new WeakMap())
   const aggregateMetricsCacheRef = useRef<WeakMap<IRowNode<LocationRow>, { points: number; hours: number; goalHours: number }>>(new WeakMap())
+
+  useEffect(() => {
+    ensureAgGridInitialized(agGridLicenseKey)
+    setGridInitialized(true)
+  }, [agGridLicenseKey])
 
   const getLocationKey = useCallback((row?: LocationRow) => {
     if (!row) return ''
@@ -976,6 +1006,14 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       headerTooltip: "Actual worked hours used in all goal comparisons.",
       filter: "agNumberColumnFilter",
       enableValue: true,
+      cellStyle: (params) => {
+        const actualHours = Number(params.value ?? 0)
+        const goalHours = params.node?.group
+          ? Number(params.node.aggData?.goalHours ?? 0)
+          : getLeafGoalHours(params.data, params.node as IRowNode<LocationRow> | undefined)
+        if (goalHours <= 0) return undefined
+        return getGoalStatusStyle(actualHours <= goalHours)
+      },
       valueFormatter: params => params.value && params.value.toFixed(2),
       tooltipValueGetter: (params: ITooltipParams<LocationRow>) => {
         const actualHours = Number(params.value ?? 0)
@@ -1171,6 +1209,8 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       if (stateApplyTimeoutRef.current) window.clearTimeout(stateApplyTimeoutRef.current)
     }
   }, [])
+
+  if (!gridInitialized) return null
 
   return (
     <section className={styles.container}>
