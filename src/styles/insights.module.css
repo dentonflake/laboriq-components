@@ -1,0 +1,81 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+
+  gap: 1rem;
+  padding: 0 1rem 1rem 1rem;
+}
+
+.grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  box-shadow: var(--shadow-lg);
+  border-radius: var(--radius-md);
+}
+
+.captionHeader {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  line-height: 1.15;
+  cursor: pointer;
+}
+
+.captionHeaderTitle {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.captionHeaderSubtitle {
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.richTooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 260px;
+  max-width: 380px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+}
+
+.richTooltipLine {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  line-height: 1.35;
+}
+
+.richTooltipLabel {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #111827;
+}
+
+.richTooltipValue {
+  font-size: 0.72rem;
+  color: #1f2937;
+}
+
+.richTooltipStatusGood {
+  color: #15803d;
+  font-weight: 700;
+}
+
+.richTooltipStatusBad {
+  color: #dc2626;
+  font-weight: 700;
+}

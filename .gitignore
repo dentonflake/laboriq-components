@@ -11,3 +11,7 @@ analyze.js
 retool-custom-component-manifest.json
 dist/*
 !dist/.placeholder
+
+.env
+.vscode
+.DS_Store
