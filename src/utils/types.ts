@@ -102,5 +102,6 @@ export type LocationRow = {
 export type LocationInsightsGridProps = {
   rowData: LocationRow[]
   gridState: GridState
+  agGridLicenseKey?: string
   setState?: (updates: Retool.SerializableObject) => void
 }

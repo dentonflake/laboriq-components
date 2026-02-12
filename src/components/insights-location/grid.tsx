@@ -5,13 +5,8 @@ import { AgChartsEnterpriseModule } from "ag-charts-enterprise"
 import { Retool } from '@tryretool/custom-component-support'
 import { AgGridReact } from 'ag-grid-react'
 
-import styles from '../styles/insights.module.css'
+import styles from '../../styles/insights.module.css'
 import { LocationRow, LocationInsightsGridProps } from '../../utils/types'
-
-require('dotenv').config();
-
-ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule, IntegratedChartsModule.with(AgChartsEnterpriseModule)])
-LicenseManager.setLicenseKey(process.env.AG_GRID_LICENSE_KEY || '')
 
 type HeaderWithCaptionProps = IHeaderParams & {
   caption?: string
@@ -68,7 +63,15 @@ const RichTooltip = (props: ITooltipParams<LocationRow>) => {
   )
 }
 
-const LocationInsightsGrid = ({ rowData, gridState }: LocationInsightsGridProps) => {
+const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: LocationInsightsGridProps) => {
+
+  ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule, IntegratedChartsModule.with(AgChartsEnterpriseModule)])
+
+  if (agGridLicenseKey) {
+    LicenseManager.setLicenseKey(agGridLicenseKey)
+  } else {
+    console.warn('AG Grid License Key not provided. Please set the "agGridLicenseKey" state variable to enable enterprise features.')
+  }
 
   // Retool state outputs
   const [currentGridState, setCurrentGridState] = Retool.useStateObject({ name: "currentGridState", inspector: "hidden", initialValue: {} })
