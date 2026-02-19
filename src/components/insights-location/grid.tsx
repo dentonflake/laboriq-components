@@ -811,7 +811,10 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       allowedAggFuncs: ['actualRateMPPAggregation'],
       aggFunc: 'actualRateMPPAggregation',
       enableValue: true,
-      cellStyle: params => getGoalStatusStyle(isMeetingGoalSPP(params)),
+      cellStyle: params => {
+        if (isUnderLaborTypeSupportGroup(params.node as IRowNode<LocationRow> | undefined)) return undefined
+        return getGoalStatusStyle(isMeetingGoalSPP(params))
+      },
       tooltipValueGetter: (params: ITooltipParams<LocationRow>) => {
         const rate = params.node?.group
           ? Number((params.node.aggData?.actualRateMPP as { value?: number } | undefined)?.value ?? 0)
@@ -911,6 +914,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       aggFunc: 'actualRateMinPPAggregation',
       enableValue: true,
       cellStyle: params => {
+        if (isUnderLaborTypeSupportGroup(params.node as IRowNode<LocationRow> | undefined)) return undefined
         const actualValue = Number(params.value ?? 0)
         const goalValue = params.node?.group
           ? Number(params.node.aggData?.goalRateMinPP ?? 0)
@@ -952,7 +956,10 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       allowedAggFuncs: ['actualPPHAggregation'],
       aggFunc: 'actualPPHAggregation',
       enableValue: true,
-      cellStyle: params => getGoalStatusStyle(isMeetingGoalPPH(params)),
+      cellStyle: params => {
+        if (isUnderLaborTypeSupportGroup(params.node as IRowNode<LocationRow> | undefined)) return undefined
+        return getGoalStatusStyle(isMeetingGoalPPH(params))
+      },
       valueGetter: (params) => {
         const points = getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined)
         const hours = Number(params.data?.hours) || 0
@@ -994,6 +1001,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       filter: "agNumberColumnFilter",
       enableValue: true,
       cellStyle: (params) => {
+        if (isUnderLaborTypeSupportGroup(params.node as IRowNode<LocationRow> | undefined)) return undefined
         const actualHours = Number(params.value ?? 0)
         const goalHours = params.node?.group
           ? Number(params.node.aggData?.goalHours ?? 0)
@@ -1046,7 +1054,10 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       allowedAggFuncs: ['hoursDeltaAggregation'],
       aggFunc: 'hoursDeltaAggregation',
       enableValue: true,
-      cellStyle: params => getGoalStatusStyle(Number(params.value ?? 0) >= 0),
+      cellStyle: params => {
+        if (isUnderLaborTypeSupportGroup(params.node as IRowNode<LocationRow> | undefined)) return undefined
+        return getGoalStatusStyle(Number(params.value ?? 0) >= 0)
+      },
       valueGetter: (params) => {
         const points = getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined)
         const goalRateSPP = getGoalRateSPP(params.data)
@@ -1075,7 +1086,10 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       allowedAggFuncs: ['pctToGoalAggregation'],
       aggFunc: 'pctToGoalAggregation',
       enableValue: true,
-      cellStyle: params => getGoalStatusStyle(Number(params.value ?? 0) >= 100),
+      cellStyle: params => {
+        if (isUnderLaborTypeSupportGroup(params.node as IRowNode<LocationRow> | undefined)) return undefined
+        return getGoalStatusStyle(Number(params.value ?? 0) >= 100)
+      },
       valueGetter: (params) => {
         const points = getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined)
         const goalRateSPP = getGoalRateSPP(params.data)
