@@ -2,7 +2,7 @@
 import { Retool } from '@tryretool/custom-component-support'
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 
-import styles from '../styles/insights.module.css'
+import styles from '../../styles/insights.module.css'
 import { AdvancedRow, AdvancedInsightsGridProps } from '../../utils/types'
 import { distinctEmployees, pphAggregation, gapPercentAggregation, directPercentAggregation, kioskPercent, proactivePercent, reactivePercent, adminPercentAggregation, indirectPercentAggregation, parseHour } from '../../utils/helpers'
 
@@ -895,6 +895,8 @@ const AdvancedInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Advanced
     gridRef.current.api.setState(gridState);
 
   }, [gridState]);
+
+  if (!gridInitialized) return null
 
   return (
     <section className={styles.container}>

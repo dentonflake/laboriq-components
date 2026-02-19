@@ -2,7 +2,7 @@
 import { Retool } from '@tryretool/custom-component-support'
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 
-import styles from '../styles/insights.module.css'
+import styles from '../../styles/insights.module.css'
 import { ActionRow, ActionInsightsGridProps } from '../../utils/types'
 import { actionCount, distinctEmployees, parseHour } from '../../utils/helpers'
 
@@ -442,6 +442,8 @@ const ActionInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: ActionInsi
     gridRef.current.api.setState(gridState);
 
   }, [gridState]);
+
+  if (!gridInitialized) return null
 
   return (
     <section className={styles.container}>
