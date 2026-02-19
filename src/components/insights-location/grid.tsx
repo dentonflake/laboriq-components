@@ -218,7 +218,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
   }, [])
 
   const isUnderLaborTypeSupportGroup = useCallback((node?: IRowNode<LocationRow>) => {
-    let cursor: IRowNode<LocationRow> | null | undefined = node
+    let cursor: IRowNode<LocationRow> | null | undefined = node?.parent
     while (cursor && cursor.level >= 0) {
       const groupColId = String(cursor.rowGroupColumn?.getColId?.() ?? '')
       const groupKey = String(cursor.key ?? '').trim().toLowerCase()
