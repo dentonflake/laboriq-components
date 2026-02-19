@@ -581,6 +581,17 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
     return num.toFixed(digits)
   }, [])
 
+  const formatGroupBlankLabel = useCallback((params: { node?: IRowNode<LocationRow>; value?: unknown }) => {
+    const rawValue = String(params.value ?? params.node?.key ?? '').trim()
+    const isBlank = rawValue === '' || rawValue.toLowerCase() === '(blanks)'
+    if (!isBlank) return rawValue
+
+    const groupColId = String(params.node?.rowGroupColumn?.getColId?.() ?? '').trim()
+    if (groupColId === 'department') return 'No Department'
+    if (groupColId === 'area') return 'No Area'
+    return 'No Value'
+  }, [])
+
   const getLeafGoalHours = useCallback((row?: LocationRow, node?: IRowNode<LocationRow>) => {
     const points = getEffectivePoints(row, node)
     const goalRateSPP = getGoalRateSPP(row)
@@ -1109,6 +1120,18 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
     }
   }), [])
 
+  const autoGroupColumnDef = useMemo<ColDef<LocationRow>>(() => ({
+    cellRendererParams: {
+      suppressCount: true,
+      innerRenderer: (params: { node?: IRowNode<LocationRow>; value?: unknown }) => {
+        return formatGroupBlankLabel({
+          node: params.node,
+          value: params.value
+        })
+      }
+    }
+  }), [formatGroupBlankLabel])
+
   // Aggregate functions
   const aggFuncs = useMemo(() => ({
     pointsAggregation,
@@ -1191,12 +1214,13 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
 
           rowData={rowData}
           columnDefs={visibleColDefs}
+          autoGroupColumnDef={autoGroupColumnDef}
           defaultColDef={ENABLE_TOOLTIPS ? { ...defaultColDef, tooltipComponent: RichTooltip } : defaultColDef}
 
           aggFuncs={aggFuncs}
           suppressAggFuncInHeader={true}
 
-          sideBar
+          // sideBar
           enableCharts
           theme={theme}
           cellSelection
