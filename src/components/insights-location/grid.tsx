@@ -217,6 +217,22 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
     return false
   }, [])
 
+  const isUnderLaborTypeSupportGroup = useCallback((node?: IRowNode<LocationRow>) => {
+    let cursor: IRowNode<LocationRow> | null | undefined = node
+    while (cursor && cursor.level >= 0) {
+      const groupColId = String(cursor.rowGroupColumn?.getColId?.() ?? '')
+      const groupKey = String(cursor.key ?? '').trim().toLowerCase()
+      if (groupColId === 'laborType' && groupKey === 'support') return true
+      cursor = cursor.parent
+    }
+    return false
+  }, [])
+
+  const formatHiddenUnderLaborTypeSupport = useCallback((value: unknown, node?: IRowNode<LocationRow>, digits = 2) => {
+    if (isUnderLaborTypeSupportGroup(node)) return ''
+    return Number(value || 0).toFixed(digits)
+  }, [isUnderLaborTypeSupportGroup])
+
   const getSiblingDirectGroupPoints = useCallback((node?: IRowNode<LocationRow>) => {
     if (!node) return null
 
@@ -869,7 +885,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       aggFunc: 'goalRateSPPAggregation',
       enableValue: true,
       valueGetter: params => getGoalRateSPP(params.data),
-      valueFormatter: params => Number(params.value || 0).toFixed(2)
+      valueFormatter: params => formatHiddenUnderLaborTypeSupport(params.value, params.node as IRowNode<LocationRow> | undefined)
     },
 
     {
@@ -911,7 +927,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       aggFunc: 'goalRateMinPPAggregation',
       enableValue: true,
       valueGetter: params => getGoalRateMPP(params.data),
-      valueFormatter: params => Number(params.value || 0).toFixed(2)
+      valueFormatter: params => formatHiddenUnderLaborTypeSupport(params.value, params.node as IRowNode<LocationRow> | undefined)
     },
 
     {
@@ -954,7 +970,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       aggFunc: 'goalRatePPHAggregation',
       enableValue: true,
       valueGetter: params => getGoalRatePPH(params.data),
-      valueFormatter: params => Number(params.value || 0).toFixed(2)
+      valueFormatter: params => formatHiddenUnderLaborTypeSupport(params.value, params.node as IRowNode<LocationRow> | undefined)
     },
 
     {
@@ -999,7 +1015,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
         const goalRateSPP = getGoalRateSPP(params.data)
         return points > 0 ? (goalRateSPP * points) / 3600 : 0
       },
-      valueFormatter: params => Number(params.value || 0).toFixed(2),
+      valueFormatter: params => formatHiddenUnderLaborTypeSupport(params.value, params.node as IRowNode<LocationRow> | undefined),
       tooltipValueGetter: (params: ITooltipParams<LocationRow>) => {
         const goalHours = Number(params.value ?? 0)
         const points = params.node?.group ? Number(params.node.aggData?.points ?? 0) : getEffectivePoints(params.data, params.node as IRowNode<LocationRow> | undefined)
@@ -1027,7 +1043,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
         const hours = Number(params.data?.hours) || 0
         return goalHours - hours
       },
-      valueFormatter: (params) =>  Number(params.value || 0).toFixed(2),
+      valueFormatter: params => formatHiddenUnderLaborTypeSupport(params.value, params.node as IRowNode<LocationRow> | undefined),
       tooltipValueGetter: (params: ITooltipParams<LocationRow>) => {
         const delta = Number(params.value ?? 0)
         const hours = params.node?.group ? Number(params.node.aggData?.hours ?? 0) : Number(params.data?.hours ?? 0)
@@ -1056,7 +1072,11 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
         const hours = Number(params.data?.hours) || 0
         return hours > 0 ? (goalHours / hours) * 100 : 0
       },
-      valueFormatter: params => `${Number(params.value || 0).toFixed(0)}%`,
+      valueFormatter: (params) => {
+        const hiddenValue = formatHiddenUnderLaborTypeSupport(params.value, params.node as IRowNode<LocationRow> | undefined, 0)
+        if (hiddenValue === '') return ''
+        return `${hiddenValue}%`
+      },
       tooltipValueGetter: (params: ITooltipParams<LocationRow>) => {
         const pct = Number(params.value ?? 0)
         const hours = params.node?.group ? Number(params.node.aggData?.hours ?? 0) : Number(params.data?.hours ?? 0)
@@ -1066,7 +1086,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       }
     },
 
-  ], [formatNumber, getEffectivePoints, getGoalRateMPP, getGoalRatePPH, getGoalRateSPP, getGoalStatusStyle, getLeafGoalHours])
+  ], [formatHiddenUnderLaborTypeSupport, formatNumber, getEffectivePoints, getGoalRateMPP, getGoalRatePPH, getGoalRateSPP, getGoalStatusStyle, getLeafGoalHours])
 
   const visibleColDefs = useMemo<ColDef<LocationRow>[]>(() => {
     if (ENABLE_TOOLTIPS) return colDefs
