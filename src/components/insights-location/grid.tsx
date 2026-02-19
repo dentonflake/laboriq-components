@@ -104,9 +104,6 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
 
   // Reference to the AG Grid table
   const gridRef = useRef<AgGridReact<LocationRow>>(null);
-  const effectivePointsCacheRef = useRef<WeakMap<IRowNode<LocationRow>, number>>(new WeakMap())
-  const ancestorDirectPointsCacheRef = useRef<WeakMap<IRowNode<LocationRow>, number | null>>(new WeakMap())
-  const aggregateMetricsCacheRef = useRef<WeakMap<IRowNode<LocationRow>, { points: number; hours: number; goalHours: number }>>(new WeakMap())
 
   useEffect(() => {
     ensureAgGridInitialized(agGridLicenseKey)
@@ -253,11 +250,6 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
   }, [])
 
   const getAncestorDirectLeafPoints = useCallback((node?: IRowNode<LocationRow>) => {
-    if (node && ancestorDirectPointsCacheRef.current.has(node)) {
-      return ancestorDirectPointsCacheRef.current.get(node) ?? null
-    }
-
-    const originalNode = node
     let cursor: IRowNode<LocationRow> | null | undefined = node
     while (cursor && cursor.level >= 0) {
       const scopedLeaves = cursor.allLeafChildren ?? []
@@ -269,15 +261,11 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
           if (String(data.laborType ?? '').trim().toLowerCase() !== 'direct') continue
           directPoints += Number(data.points) || 0
         }
-        if (directPoints > 0) {
-          if (originalNode) ancestorDirectPointsCacheRef.current.set(originalNode, directPoints)
-          return directPoints
-        }
+        if (directPoints > 0) return directPoints
       }
       cursor = cursor.parent
     }
 
-    if (originalNode) ancestorDirectPointsCacheRef.current.set(originalNode, null)
     return null
   }, [])
 
@@ -323,60 +311,38 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
   }, [])
 
   const getEffectivePoints = useCallback((row?: LocationRow, node?: IRowNode<LocationRow>, contextNode?: IRowNode<LocationRow>) => {
-    if (node && effectivePointsCacheRef.current.has(node)) {
-      return Number(effectivePointsCacheRef.current.get(node) ?? 0)
-    }
-
     if (!row) return 0
 
     const currentPoints = Number(row.points) || 0
     const laborType = String(row.laborType ?? '').trim().toLowerCase()
     const supportByGroup = isUnderSupportGroup(node) || isUnderSupportGroup(contextNode)
     if (laborType !== 'support' && !supportByGroup) {
-      if (node) effectivePointsCacheRef.current.set(node, currentPoints)
       return currentPoints
     }
 
     const ancestorDirectPoints = getAncestorDirectLeafPoints(node) ?? getAncestorDirectLeafPoints(contextNode)
-    if (ancestorDirectPoints != null) {
-      if (node) effectivePointsCacheRef.current.set(node, ancestorDirectPoints)
-      return ancestorDirectPoints
-    }
+    if (ancestorDirectPoints != null) return ancestorDirectPoints
 
     const supportAncestorPoints = getSupportAncestorPoints(node) ?? getSupportAncestorPoints(contextNode)
-    if (supportAncestorPoints != null) {
-      if (node) effectivePointsCacheRef.current.set(node, supportAncestorPoints)
-      return supportAncestorPoints
-    }
+    if (supportAncestorPoints != null) return supportAncestorPoints
 
     const siblingDirectPoints = getSiblingDirectGroupPoints(node) ?? getSiblingDirectGroupPoints(contextNode)
-    if (siblingDirectPoints != null) {
-      if (node) effectivePointsCacheRef.current.set(node, siblingDirectPoints)
-      return siblingDirectPoints
-    }
+    if (siblingDirectPoints != null) return siblingDirectPoints
 
     const pathDirectPoints = getDirectPointsByGroupPath(node) ?? getDirectPointsByGroupPath(contextNode)
-    if (pathDirectPoints != null && pathDirectPoints > 0) {
-      if (node) effectivePointsCacheRef.current.set(node, pathDirectPoints)
-      return pathDirectPoints
-    }
+    if (pathDirectPoints != null && pathDirectPoints > 0) return pathDirectPoints
 
     const scopeMetrics = getSupportScopeMetrics(node) ?? getSupportScopeMetrics(contextNode)
-    if (scopeMetrics && scopeMetrics.supportCount > 0) {
-      if (node) effectivePointsCacheRef.current.set(node, scopeMetrics.directPoints)
-      return scopeMetrics.directPoints
-    }
+    if (scopeMetrics && scopeMetrics.supportCount > 0) return scopeMetrics.directPoints
 
     const keys = getLookupKeys(row)
     for (const key of keys) {
       const directPoints = directPointsByKey.get(key)
       if (directPoints == null) continue
 
-      if (node) effectivePointsCacheRef.current.set(node, directPoints)
       return directPoints
     }
 
-    if (node) effectivePointsCacheRef.current.set(node, currentPoints)
     return currentPoints
   }, [directPointsByKey, getAncestorDirectLeafPoints, getDirectPointsByGroupPath, getLookupKeys, getSiblingDirectGroupPoints, getSupportAncestorPoints, getSupportScopeMetrics, isUnderSupportGroup])
 
@@ -449,11 +415,6 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
   }, [getGoalRatePPH])
 
   const aggregateMetrics = useCallback((params: IAggFuncParams) => {
-    const rowNode = params.rowNode as IRowNode<LocationRow> | undefined
-    if (rowNode && aggregateMetricsCacheRef.current.has(rowNode)) {
-      return aggregateMetricsCacheRef.current.get(rowNode)!
-    }
-
     const leaves = params.rowNode?.allLeafChildren ?? []
     const sumsByKey = new Map<string, {
       directPoints: number
@@ -538,7 +499,6 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       hours,
       goalHours
     }
-    if (rowNode) aggregateMetricsCacheRef.current.set(rowNode, result)
     return result
   }, [buildPointsKey, getAncestorDirectLeafPoints, getEffectivePoints, getGoalRateSPP])
 
@@ -1067,7 +1027,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
         const hours = Number(params.data?.hours) || 0
         return goalHours - hours
       },
-      valueFormatter: params => Number(params.value || 0).toFixed(2),
+      valueFormatter: (params) =>  Number(params.value || 0).toFixed(2),
       tooltipValueGetter: (params: ITooltipParams<LocationRow>) => {
         const delta = Number(params.value ?? 0)
         const hours = params.node?.group ? Number(params.node.aggData?.hours ?? 0) : Number(params.data?.hours ?? 0)
@@ -1155,11 +1115,6 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
 
   const debounceTimeoutRef = useRef<number | null>(null);
   const stateApplyTimeoutRef = useRef<number | null>(null);
-  const clearComputationCaches = useCallback(() => {
-    effectivePointsCacheRef.current = new WeakMap()
-    ancestorDirectPointsCacheRef.current = new WeakMap()
-    aggregateMetricsCacheRef.current = new WeakMap()
-  }, [])
 
   const scheduleApplyGridState = useCallback(() => {
     if (!gridRef.current?.api) return
@@ -1168,14 +1123,12 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
     stateApplyTimeoutRef.current = window.setTimeout(() => {
       if (!gridRef.current?.api || !gridState) return
       gridRef.current.api.setState(gridState)
-      clearComputationCaches()
     }, 0)
-  }, [clearComputationCaches, gridState])
+  }, [gridState])
 
   const onStateUpdated = useCallback((_event: StateUpdatedEvent) => {
 
     if (!gridRef.current) return;
-    clearComputationCaches()
     if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
 
     debounceTimeoutRef.current = window.setTimeout(() => {
@@ -1183,7 +1136,7 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
       setCurrentGridState(gridState as Retool.SerializableObject);
     }, 200);
     
-  }, [clearComputationCaches, setCurrentGridState]);
+  }, [setCurrentGridState]);
 
   const onFirstDataRendered = () => {
 
@@ -1198,10 +1151,6 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
     scheduleApplyGridState()
 
   }, [scheduleApplyGridState]);
-
-  useEffect(() => {
-    clearComputationCaches()
-  }, [clearComputationCaches, rowData])
 
   useEffect(() => {
     return () => {
@@ -1231,7 +1180,6 @@ const LocationInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: Location
           enableCharts
           theme={theme}
           cellSelection
-          valueCache
           tooltipShowDelay={ENABLE_TOOLTIPS ? 120 : 999999}
           tooltipMouseTrack={ENABLE_TOOLTIPS}
 
