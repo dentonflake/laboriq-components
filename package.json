@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
+    "@heroicons/react": "^2.2.0",
     "@tryretool/custom-component-support": "latest",
     "ag-grid-enterprise": "^35.1.0",
     "ag-grid-react": "^35.1.0",

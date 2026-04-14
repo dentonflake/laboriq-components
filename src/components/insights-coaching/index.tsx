@@ -1,7 +1,16 @@
 import { Retool } from '@tryretool/custom-component-support'
-import React, { useMemo, useState, useRef, useCallback } from 'react'
+import React, { useMemo, useRef, useCallback } from 'react'
+import {
+  CheckCircleIcon,
+  XCircleIcon,
+  ClockIcon,
+  ShieldExclamationIcon,
+  ClipboardDocumentListIcon,
+  ArrowTrendingUpIcon,
+} from '@heroicons/react/24/outline'
 import { ColDef, ModuleRegistry, AllCommunityModule, themeQuartz } from 'ag-grid-community'
-import { LicenseManager, AllEnterpriseModule } from 'ag-grid-enterprise'
+import { LicenseManager, AllEnterpriseModule, IntegratedChartsModule } from 'ag-grid-enterprise'
+import { AgChartsEnterpriseModule } from 'ag-charts-enterprise'
 import { AgGridReact } from 'ag-grid-react'
 import {
   ComposedChart, BarChart, PieChart, Pie, Bar, Line,
@@ -23,17 +32,12 @@ const ensureAgGridInitialized = (licenseKey?: string) => {
     appliedLicenseKey = key
   }
   if (!hasRegisteredModules) {
-    ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule])
+    ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule, IntegratedChartsModule.with(AgChartsEnterpriseModule)])
     hasRegisteredModules = true
   }
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-
-type LocationOption = {
-  id: number
-  name: string
-}
 
 type CoachingLog = {
   id: number
@@ -84,7 +88,6 @@ const EXEMPTED_ACTIONS  = ['exempted']
 const MISSED_ACTIONS    = ['missed']
 const IMPROVED_ACTIONS  = ['improved']
 
-const WEEKS = 13 // ~90 days
 
 const SEVERITY_LEVELS: Record<number, { label: string, color: string }> = {
   1: { label: 'Coaching 1',              color: '#93C5FD' },
@@ -112,6 +115,11 @@ const getExemptionType = (c: Coaching) => {
 
 const getExemptionNote = (c: Coaching) => {
   const log = c.logs.find(l => l.action === 'exempted')
+  return (log?.content?.note as string) || (log?.content?.notes as string) || (log?.content?.reason as string) || '—'
+}
+
+const getRequesterNote = (c: Coaching) => {
+  const log = c.logs.find(l => l.action === 'exemption requested' || l.action === 'override requested')
   return (log?.content?.note as string) || (log?.content?.notes as string) || (log?.content?.reason as string) || '—'
 }
 
@@ -150,32 +158,40 @@ const getMondayOf = (date: Date): Date => {
   return d
 }
 
-const buildWeeklyData = (coachings: Coaching[]): WeeklyDataPoint[] =>
-  Array.from({ length: WEEKS }, (_, i) => {
-    const currentMonday = getMondayOf(new Date())
-    const weekStart = new Date(currentMonday)
-    weekStart.setDate(weekStart.getDate() - (WEEKS - 1 - i) * 7)
-    const weekEnd = new Date(weekStart)
+
+const buildWeeklyData = (coachings: Coaching[]): WeeklyDataPoint[] => {
+  if (!coachings.length) return []
+
+  const dates = coachings.map(c => new Date(c.createdAt).getTime())
+  const start = getMondayOf(new Date(Math.min(...dates)))
+  const end   = new Date(Math.max(...dates))
+  const weeks: WeeklyDataPoint[] = []
+  const cursor = new Date(start)
+
+  while (cursor <= end) {
+    const weekStart = new Date(cursor)
+    const weekEnd   = new Date(cursor)
     weekEnd.setDate(weekEnd.getDate() + 7)
 
-    const inWeek = coachings.filter(c => {
-      const d = new Date(c.createdAt)
-      return d >= weekStart && d < weekEnd
-    })
-
+    const inWeek    = coachings.filter(c => { const d = new Date(c.createdAt); return d >= weekStart && d < weekEnd })
     const delivered = inWeek.filter(isCompleted).length
     const improved  = inWeek.filter(isImproved).length
     const exempted  = inWeek.filter(isExempted).length
     const missed    = inWeek.filter(isMissed).length
     const pending   = inWeek.filter(isPending).length
     const total     = inWeek.length
-    const completionPct = total ? Math.round(delivered / total * 100) : 0
 
-    return {
+    weeks.push({
       week: `${weekStart.getMonth() + 1}/${weekStart.getDate()}`,
-      delivered, improved, exempted, missed, pending, total, completionPct,
-    }
-  })
+      delivered, improved, exempted, missed, pending, total,
+      completionPct: total ? Math.round(delivered / total * 100) : 0,
+    })
+
+    cursor.setDate(cursor.getDate() + 7)
+  }
+
+  return weeks.filter(w => w.total > 0)
+}
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -201,14 +217,18 @@ type StatProps = {
   pct?: number
   sub: string
   accent: string
+  icon: React.ElementType
 }
 
-const StatCard = ({ label, value, pct, sub, accent }: StatProps) => (
+const StatCard = ({ label, value, pct, sub, accent, icon: Icon }: StatProps) => (
   <div style={{
     background: '#fff', borderRadius: 10, padding: '16px 18px',
     boxShadow: '0 1px 1px rgba(0,0,0,0.08), 0 8px 10px rgba(0,0,0,0.08)',
   }}>
-    <div style={{ fontSize: 11, fontWeight: 500, color: '#9b9a94', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>{label}</div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 10 }}>
+      <Icon style={{ width: 13, height: 13, color: accent, opacity: 0.7, flexShrink: 0 }} />
+      <div style={{ fontSize: 11, fontWeight: 500, color: '#9b9a94', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
+    </div>
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
       <div style={{ fontSize: 32, fontWeight: 600, color: accent, lineHeight: 1 }}>{value}</div>
       {pct !== undefined && (
@@ -218,6 +238,7 @@ const StatCard = ({ label, value, pct, sub, accent }: StatProps) => (
     <div style={{ fontSize: 12, color: '#b8b7b0', marginTop: 7 }}>{sub}</div>
   </div>
 )
+
 
 const STATUS_COLORS = {
   delivered: '#3B6D11',
@@ -269,70 +290,26 @@ const ChartTooltip = ({ active, payload, label }: TooltipProps<ValueType, NameTy
 
 export const CoachingInsights = () => {
   const [rawData] = Retool.useStateArray({ name: 'data', label: 'Data Source' })
-  const [rawLocations] = Retool.useStateArray({ name: 'locations', label: 'Locations' })
-  const [, setSelectedLocationIds] = Retool.useStateArray({ name: 'selectedLocationIds', initialValue: [] })
-  const triggerFiltersChanged = Retool.useEventCallback({ name: 'filtersChanged' })
-  const [, setRetoolDateFrom] = Retool.useStateString({ name: 'dateFrom', initialValue: '' })
-  const [, setRetoolDateTo]   = Retool.useStateString({ name: 'dateTo',   initialValue: '' })
   const [rawLicenseKey] = Retool.useStateString({ name: 'agGridLicenseKey', label: 'AG Grid License Key' })
 
   const agGridLicenseKey = rawLicenseKey as string
   ensureAgGridInitialized(agGridLicenseKey)
 
-  const coachings  = useMemo(() => rawData  as Coaching[],       [JSON.stringify(rawData)])
-  const locations  = useMemo(() => rawLocations as LocationOption[], [JSON.stringify(rawLocations)])
+  const coachings = useMemo(() => rawData as Coaching[], [JSON.stringify(rawData)])
 
-  const [selectedLocationId, setSelectedLocationId] = useState<number | null>(null)
-  const [supervisorFilter,   setSupervisorFilter]   = useState('all')
-  const [dateFrom,           setDateFrom]           = useState('')
-  const [dateTo,             setDateTo]             = useState('')
-
-  const handleLocationChange = (id: number | null) => {
-    setSelectedLocationId(id)
-    setSupervisorFilter('all')
-  }
-
-  const applyFilters = () => {
-    setSelectedLocationIds(selectedLocationId != null ? [selectedLocationId] : [])
-    setRetoolDateFrom(dateFrom)
-    setRetoolDateTo(dateTo)
-    triggerFiltersChanged()
-  }
-
-  const [typeFilter, setTypeFilter] = useState('all')
   const gridRef = useRef<AgGridReact>(null)
   const onFirstDataRendered = useCallback(() => gridRef.current?.api.autoSizeAllColumns(), [])
 
   const perfGridRef = useRef<AgGridReact>(null)
   const onPerfFirstDataRendered = useCallback(() => perfGridRef.current?.api.autoSizeAllColumns(), [])
 
-  const supervisors = useMemo(
-    () => [...new Set(coachings.map(c => c.supervisor).filter(Boolean))].sort(),
-    [coachings],
-  )
-
-  const filteredCoachings = useMemo(
-    () => supervisorFilter === 'all' ? coachings : coachings.filter(c => c.supervisor === supervisorFilter),
-    [coachings, supervisorFilter],
-  )
-
-  const coachingTypes = useMemo(
-    () => [...new Set(filteredCoachings.map(c => c.type).filter(Boolean))].sort(),
-    [filteredCoachings],
-  )
-
-  const filteredForChart = useMemo(
-    () => typeFilter === 'all' ? filteredCoachings : filteredCoachings.filter(c => c.type === typeFilter),
-    [filteredCoachings, typeFilter],
-  )
-
   const totals = useMemo(() => {
-    const total     = filteredCoachings.length
-    const completed = filteredCoachings.filter(isCompleted).length
-    const improved  = filteredCoachings.filter(isImproved).length
-    const exempted  = filteredCoachings.filter(isExempted).length
-    const missed    = filteredCoachings.filter(isMissed).length
-    const pending   = filteredCoachings.filter(isPending).length
+    const total     = coachings.length
+    const completed = coachings.filter(isCompleted).length
+    const improved  = coachings.filter(isImproved).length
+    const exempted  = coachings.filter(isExempted).length
+    const missed    = coachings.filter(isMissed).length
+    const pending   = coachings.filter(isPending).length
     const pct = (n: number) => total ? Math.round(n / total * 100) : 0
     return {
       total, completed, improved, exempted, missed, pending,
@@ -342,23 +319,23 @@ export const CoachingInsights = () => {
       missedPct:    pct(missed),
       pendingPct:   pct(pending),
     }
-  }, [filteredCoachings])
+  }, [coachings])
 
-  const weeklyData = useMemo(() => buildWeeklyData(filteredForChart), [filteredForChart])
+  const weeklyData = useMemo(() => buildWeeklyData(coachings), [coachings])
 
   const severityData = useMemo(() =>
     Object.entries(SEVERITY_LEVELS)
       .map(([sev, { label, color }]) => ({
         name:  label,
-        value: filteredCoachings.filter(c => c.severity === Number(sev)).length,
+        value: coachings.filter(c => c.severity === Number(sev)).length,
         fill:  color,
       }))
       .filter(d => d.value > 0),
-    [filteredCoachings],
+    [coachings],
   )
 
   const performanceRows = useMemo(() =>
-    filteredCoachings.map(c => ({
+    coachings.map(c => ({
       location:   c.location   || 'Unknown',
       supervisor: c.supervisor || 'Unknown',
       employee:   c.employee,
@@ -374,7 +351,7 @@ export const CoachingInsights = () => {
       timeToDelivered: firstActionHours(c, 'delivered'),
       timeToExempted:  firstActionHours(c, 'exempted'),
     })),
-    [filteredCoachings],
+    [coachings],
   )
 
   const performanceColDefs = useMemo<ColDef[]>(() => [
@@ -404,7 +381,7 @@ export const CoachingInsights = () => {
   ], [])
 
   const exemptionRows = useMemo(() =>
-    filteredCoachings
+    coachings
       .filter(isExempted)
       .map(c => ({
         date:          formatDate(c.logs.find(l => l.action === 'exempted')?.createdAt || c.createdAt),
@@ -412,11 +389,12 @@ export const CoachingInsights = () => {
         supervisor:    c.supervisor,
         location:      c.location,
         severityLabel: SEVERITY_LEVELS[c.severity]?.label ?? `Level ${c.severity}`,
-        exemptionType: getExemptionType(c),
-        notes:         getExemptionNote(c),
+        exemptionType:  getExemptionType(c),
+        requesterNotes: getRequesterNote(c),
+        notes:          getExemptionNote(c),
       }))
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
-    [filteredCoachings],
+    [coachings],
   )
 
   const exemptionColDefs = useMemo<ColDef[]>(() => [
@@ -425,92 +403,39 @@ export const CoachingInsights = () => {
     { field: 'employee',      headerName: 'Employee' },
     { field: 'location',      headerName: 'Location' },
     { field: 'severityLabel', headerName: 'Severity' },
-    { field: 'exemptionType', headerName: 'Exemption Type' },
-    { field: 'notes',         headerName: 'Notes', wrapText: true, autoHeight: true, cellStyle: { whiteSpace: 'normal', lineHeight: '1.4' } },
+    { field: 'exemptionType',  headerName: 'Exemption Type' },
+    { field: 'requesterNotes', headerName: "Requester's Notes", wrapText: true, autoHeight: true, maxWidth: 320, cellStyle: { display: 'flex', alignItems: 'flex-start', whiteSpace: 'normal', lineHeight: '1.4', paddingTop: 8, paddingBottom: 8 } },
+    { field: 'notes',          headerName: "Approver's Notes",  wrapText: true, autoHeight: true, maxWidth: 320, cellStyle: { display: 'flex', alignItems: 'flex-start', whiteSpace: 'normal', lineHeight: '1.4', paddingTop: 8, paddingBottom: 8 } },
   ], [])
 
 
   const exemptionData = useMemo(() => {
     const map: Record<string, number> = {}
-    for (const c of filteredCoachings.filter(isExempted)) {
+    for (const c of coachings.filter(isExempted)) {
       const type = getExemptionType(c)
       map[type] = (map[type] || 0) + 1
     }
     return Object.entries(map)
       .map(([type, count]) => ({ type, count }))
       .sort((a, b) => b.count - a.count)
-  }, [filteredCoachings])
+  }, [coachings])
 
   return (
     <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', background: '#FBFBFC', minHeight: '100vh', padding: '20px 20px' }}>
 
-      {/* Title + filters */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-        <div style={{ fontSize: 18, fontWeight: 600, color: '#1a1a1a' }}>Coaching Insights</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {/* Left filter group: location, dates, apply */}
-          <select
-            value={selectedLocationId ?? ''}
-            onChange={e => handleLocationChange(e.target.value ? Number(e.target.value) : null)}
-            style={{ fontSize: 12, padding: '5px 8px', border: '0.5px solid rgba(0,0,0,0.15)', borderRadius: 6, background: '#fff', color: '#1a1a1a', cursor: 'pointer' }}
-          >
-            <option value="">All locations</option>
-            {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
-          <input
-            type="date"
-            value={dateFrom}
-            onChange={e => setDateFrom(e.target.value)}
-            style={{ fontSize: 12, padding: '5px 8px', border: '0.5px solid rgba(0,0,0,0.15)', borderRadius: 6, background: '#fff', color: dateFrom ? '#1a1a1a' : '#9b9a94', cursor: 'pointer' }}
-          />
-          <span style={{ fontSize: 12, color: '#9b9a94' }}>to</span>
-          <input
-            type="date"
-            value={dateTo}
-            onChange={e => setDateTo(e.target.value)}
-            style={{ fontSize: 12, padding: '5px 8px', border: '0.5px solid rgba(0,0,0,0.15)', borderRadius: 6, background: '#fff', color: dateTo ? '#1a1a1a' : '#9b9a94', cursor: 'pointer' }}
-          />
-          <button
-            onClick={applyFilters}
-            style={{ fontSize: 12, padding: '5px 12px', border: 'none', borderRadius: 6, background: '#1a1a1a', color: '#fff', cursor: 'pointer', fontWeight: 500 }}
-          >
-            Apply
-          </button>
-          {/* Right filter: supervisor */}
-          <div style={{ width: 1, height: 20, background: 'rgba(0,0,0,0.12)', margin: '0 4px' }} />
-          <select
-            value={supervisorFilter}
-            onChange={e => setSupervisorFilter(e.target.value)}
-            style={{ fontSize: 12, padding: '5px 8px', border: '0.5px solid rgba(0,0,0,0.15)', borderRadius: 6, background: '#fff', color: '#1a1a1a', cursor: 'pointer' }}
-          >
-            <option value="all">All supervisors</option>
-            {supervisors.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-      </div>
-
       {/* Stat cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0,1fr))', gap: 10, marginBottom: 16 }}>
-        <StatCard label="Total"     value={totals.total}     sub="All coachings"        accent="#6B7280" />
-        <StatCard label="Delivered" value={totals.completed} pct={totals.completedPct}  sub="Coaching delivered"    accent={STATUS_COLORS.delivered} />
-        <StatCard label="Exempted"  value={totals.exempted}  pct={totals.exemptedPct}   sub="Override or exemption" accent={STATUS_COLORS.exempted} />
-        <StatCard label="Missed"    value={totals.missed}    pct={totals.missedPct}     sub="No delivery recorded"  accent={STATUS_COLORS.missed} />
-        <StatCard label="Pending"   value={totals.pending}   pct={totals.pendingPct}    sub="Awaiting action"       accent={STATUS_COLORS.pending} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0,1fr))', gap: 10, marginBottom: 16 }}>
+        <StatCard label="Total"     value={totals.total}     sub="All coachings"        accent="#6B7280"             icon={ClipboardDocumentListIcon} />
+        <StatCard label="Delivered" value={totals.completed} pct={totals.completedPct}  sub="Coaching delivered"     accent={STATUS_COLORS.delivered} icon={CheckCircleIcon} />
+        <StatCard label="Improved"  value={totals.improved}  pct={totals.improvedPct}   sub="Performance improved"   accent={STATUS_COLORS.improved}  icon={ArrowTrendingUpIcon} />
+        <StatCard label="Exempted"  value={totals.exempted}  pct={totals.exemptedPct}   sub="Override or exemption"  accent={STATUS_COLORS.exempted}  icon={ShieldExclamationIcon} />
+        <StatCard label="Missed"    value={totals.missed}    pct={totals.missedPct}     sub="No delivery recorded"   accent={STATUS_COLORS.missed}    icon={XCircleIcon} />
+        <StatCard label="Pending"   value={totals.pending}   pct={totals.pendingPct}    sub="Awaiting action"        accent={STATUS_COLORS.pending}   icon={ClockIcon} />
       </div>
 
       {/* Weekly trend */}
       <Card>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-          <SectionTitle style={{ marginBottom: 0 }}>Weekly trend — last 12 weeks</SectionTitle>
-          <select
-            value={typeFilter}
-            onChange={e => setTypeFilter(e.target.value)}
-            style={{ fontSize: 12, padding: '5px 8px', border: '0.5px solid rgba(0,0,0,0.15)', borderRadius: 6, background: '#fff', color: '#1a1a1a', cursor: 'pointer' }}
-          >
-            <option value="all">All types</option>
-            {coachingTypes.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
-          </select>
-        </div>
+        <SectionTitle>Weekly trend</SectionTitle>
         <ResponsiveContainer width="100%" height={280}>
           <ComposedChart data={weeklyData} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" vertical={false} />
@@ -534,60 +459,62 @@ export const CoachingInsights = () => {
       {/* Severity + Exemptions */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
 
-        {/* Severity pie */}
+        {/* Severity bar */}
         <Card>
           <SectionTitle>Coachings by severity</SectionTitle>
           <ResponsiveContainer width="100%" height={280}>
-            <PieChart>
-              <Pie
-                data={severityData}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                outerRadius={100}
-                innerRadius={48}
-              >
-                {severityData.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
-              </Pie>
+            <BarChart layout="vertical" data={severityData} margin={{ top: 0, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" horizontal={false} />
+              <XAxis type="number" tick={{ fontSize: 11, fill: '#9b9a94' }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <YAxis type="category" dataKey="name" width={160} tick={<TruncatedTick />} axisLine={false} tickLine={false} />
               <Tooltip
-                formatter={(value: number, name: string) => [value, name]}
+                formatter={(value: number) => [value, 'Count']}
                 contentStyle={{
                   background: '#fff', border: '0.5px solid rgba(0,0,0,0.1)',
                   borderRadius: 8, fontSize: 12,
                   boxShadow: '0 1px 1px rgba(0,0,0,0.08), 0 8px 10px rgba(0,0,0,0.08)',
                 }}
               />
-              <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, color: '#444', paddingTop: 12 }} />
-            </PieChart>
+              <Bar dataKey="value" radius={[0, 4, 4, 0]} maxBarSize={28}>
+                {severityData.map((entry, i) => (
+                  <Cell key={i} fill={entry.fill} />
+                ))}
+              </Bar>
+            </BarChart>
           </ResponsiveContainer>
         </Card>
 
-        {/* Exemptions by type */}
+        {/* Exemptions by type pie */}
         <Card>
           <SectionTitle>Exemptions by type</SectionTitle>
           {exemptionData.length === 0
             ? <div style={{ fontSize: 13, color: '#b8b7b0', paddingTop: 8 }}>No exemptions in data</div>
             : (
               <ResponsiveContainer width="100%" height={280}>
-                <BarChart layout="vertical" data={exemptionData} margin={{ top: 0, right: 16, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 11, fill: '#9b9a94' }} axisLine={false} tickLine={false} />
-                  <YAxis type="category" dataKey="type" width={140} tick={<TruncatedTick />} axisLine={false} tickLine={false} />
+                <PieChart>
+                  <Pie
+                    data={exemptionData}
+                    dataKey="count"
+                    nameKey="type"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={100}
+                    innerRadius={48}
+                  >
+                    {exemptionData.map((_, i) => (
+                      <Cell key={i} fill={EXEMP_PALETTE[i % EXEMP_PALETTE.length]} />
+                    ))}
+                  </Pie>
                   <Tooltip
-                    formatter={(value: number) => [value, 'Count']}
+                    formatter={(value: number, name: string) => [value, name]}
                     contentStyle={{
                       background: '#fff', border: '0.5px solid rgba(0,0,0,0.1)',
                       borderRadius: 8, fontSize: 12,
                       boxShadow: '0 1px 1px rgba(0,0,0,0.08), 0 8px 10px rgba(0,0,0,0.08)',
                     }}
                   />
-                  <Bar dataKey="count" radius={[0, 4, 4, 0]} maxBarSize={28}>
-                    {exemptionData.map((_, i) => (
-                      <Cell key={i} fill={EXEMP_PALETTE[i % EXEMP_PALETTE.length]} />
-                    ))}
-                  </Bar>
-                </BarChart>
+                  <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, color: '#444', paddingTop: 12 }} />
+                </PieChart>
               </ResponsiveContainer>
             )
           }
@@ -604,10 +531,12 @@ export const CoachingInsights = () => {
             rowData={performanceRows}
             columnDefs={performanceColDefs}
             theme={themeQuartz}
-            defaultColDef={{ resizable: true, filter: true, sortable: true }}
+            defaultColDef={{ resizable: true, filter: true, sortable: true, cellStyle: { display: 'flex', alignItems: 'center' } }}
             autoGroupColumnDef={{ headerName: 'Location / Supervisor', minWidth: 220, pinned: 'left' }}
             suppressAggFuncInHeader
             groupDefaultExpanded={1}
+            enableCharts
+            cellSelection
             onFirstDataRendered={onPerfFirstDataRendered}
           />
         </div>
@@ -622,7 +551,9 @@ export const CoachingInsights = () => {
             rowData={exemptionRows}
             columnDefs={exemptionColDefs}
             theme={themeQuartz}
-            defaultColDef={{ resizable: true, filter: true, sortable: true }}
+            defaultColDef={{ resizable: true, filter: true, sortable: true, cellStyle: { display: 'flex', alignItems: 'center' } }}
+            enableCharts
+            cellSelection
             onFirstDataRendered={onFirstDataRendered}
           />
         </div>
