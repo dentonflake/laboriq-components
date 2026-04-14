@@ -71,13 +71,23 @@ type Coaching = {
 
 type WeeklyDataPoint = {
   week: string
-  delivered: number
-  improved: number
-  exempted: number
-  missed: number
-  pending: number
   total: number
   completionPct: number
+  initiated: number
+  viewed: number
+  reviewed: number
+  override_requested: number
+  override_request_cancelled: number
+  override_denied: number
+  override_approved: number
+  exemption_requested: number
+  exemption_request_cancelled: number
+  exemption_denied: number
+  journal_created: number
+  missed: number
+  exempted: number
+  delivered: number
+  improved: number
 }
 
 
@@ -99,6 +109,24 @@ const SEVERITY_LEVELS: Record<number, { label: string, color: string }> = {
 }
 
 const EXEMP_PALETTE = ['#378ADD', '#1D9E75', '#7C3AED', '#D85A30', '#E24B4A', '#854F0B', '#185FA5', '#3B6D11']
+
+const ACTION_STAGES = [
+  { field: 'initiated',                   label: 'Initiated',                   color: '#DBEAFE' },
+  { field: 'viewed',                      label: 'Viewed',                      color: '#93C5FD' },
+  { field: 'reviewed',                    label: 'Reviewed',                    color: '#60A5FA' },
+  { field: 'override_requested',          label: 'Override Requested',          color: '#3B82F6' },
+  { field: 'override_request_cancelled',  label: 'Override Request Cancelled',  color: '#94A3B8' },
+  { field: 'override_denied',             label: 'Override Denied',             color: '#FB923C' },
+  { field: 'override_approved',           label: 'Override Approved',           color: '#6EE7B7' },
+  { field: 'exemption_requested',         label: 'Exemption Requested',         color: '#818CF8' },
+  { field: 'exemption_request_cancelled', label: 'Exemption Request Cancelled', color: '#94A3B8' },
+  { field: 'exemption_denied',            label: 'Exemption Denied',            color: '#FB923C' },
+  { field: 'journal_created',             label: 'Journal Created',             color: '#A78BFA' },
+  { field: 'missed',                      label: 'Missed',                      color: '#E24B4A' },
+  { field: 'exempted',                    label: 'Exempted',                    color: '#854F0B' },
+  { field: 'delivered',                   label: 'Delivered',                   color: '#3B6D11' },
+  { field: 'improved',                    label: 'Improved',                    color: '#1D9E75' },
+] as const
 
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -173,18 +201,30 @@ const buildWeeklyData = (coachings: Coaching[]): WeeklyDataPoint[] => {
     const weekEnd   = new Date(cursor)
     weekEnd.setDate(weekEnd.getDate() + 7)
 
-    const inWeek    = coachings.filter(c => { const d = new Date(c.createdAt); return d >= weekStart && d < weekEnd })
-    const delivered = inWeek.filter(isCompleted).length
-    const improved  = inWeek.filter(isImproved).length
-    const exempted  = inWeek.filter(isExempted).length
-    const missed    = inWeek.filter(isMissed).length
-    const pending   = inWeek.filter(isPending).length
-    const total     = inWeek.length
+    const inWeek   = coachings.filter(c => { const d = new Date(c.createdAt); return d >= weekStart && d < weekEnd })
+    const total    = inWeek.length
+    const by       = (action: string) => inWeek.filter(c => c.lastAction === action).length
+    const delivered = by('delivered')
 
     weeks.push({
       week: `${weekStart.getMonth() + 1}/${weekStart.getDate()}`,
-      delivered, improved, exempted, missed, pending, total,
-      completionPct: total ? Math.round(delivered / total * 100) : 0,
+      total,
+      completionPct:              total ? Math.round(delivered / total * 100) : 0,
+      initiated:                  by('initiated'),
+      viewed:                     by('viewed'),
+      reviewed:                   by('reviewed'),
+      override_requested:         by('override requested'),
+      override_request_cancelled: by('override request cancelled'),
+      override_denied:            by('override denied'),
+      override_approved:          by('override approved'),
+      exemption_requested:        by('exemption requested'),
+      exemption_request_cancelled:by('exemption request cancelled'),
+      exemption_denied:           by('exemption denied'),
+      journal_created:            by('journal created'),
+      missed:                     by('missed'),
+      exempted:                   by('exempted'),
+      delivered,
+      improved:                   by('improved'),
     })
 
     cursor.setDate(cursor.getDate() + 7)
@@ -257,7 +297,7 @@ const TruncatedTick = ({ x, y, payload }: { x?: number, y?: number, payload?: { 
 const ChartTooltip = ({ active, payload, label }: TooltipProps<ValueType, NameType>) => {
   if (!active || !payload?.length) return null
   const total = payload.find(p => p.name === 'total')?.value as number ?? 0
-  const rows = payload.filter(p => p.name !== 'total' && p.name !== 'Delivery %')
+  const rows = payload.filter(p => p.name !== 'total' && p.name !== 'Delivery %' && (p.value as number) > 0)
   return (
     <div style={{
       background: '#fff', border: '0.5px solid rgba(0,0,0,0.1)',
@@ -282,6 +322,31 @@ const ChartTooltip = ({ active, payload, label }: TooltipProps<ValueType, NameTy
         <span>Delivery %</span>
         <span style={{ fontWeight: 500 }}>{payload.find(p => p.name === 'Delivery %')?.value}%</span>
       </div>
+    </div>
+  )
+}
+
+type LegendPayloadItem = { value: string, color: string }
+
+const ChartLegend = ({ payload, cols = 6 }: { payload?: LegendPayloadItem[], cols?: number }) => {
+  if (!payload?.length) return null
+  const items = payload.filter(p => p.value !== 'total' && p.value !== 'Delivery %')
+  const rows = Math.ceil(items.length / cols)
+  const columns: LegendPayloadItem[][] = Array.from({ length: cols }, (_, col) =>
+    items.slice(col * rows, col * rows + rows)
+  ).filter(col => col.length > 0)
+  return (
+    <div style={{ display: 'flex', gap: 32, paddingTop: 14, justifyContent: 'center' }}>
+      {columns.map((col, ci) => (
+        <div key={ci} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {col.map(item => (
+            <div key={item.value} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#555', whiteSpace: 'nowrap' }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: item.color, flexShrink: 0, display: 'inline-block' }} />
+              {item.value}
+            </div>
+          ))}
+        </div>
+      ))}
     </div>
   )
 }
@@ -443,14 +508,12 @@ export const CoachingInsights = () => {
             <YAxis yAxisId="count" width={40} tick={{ fontSize: 11, fill: '#9b9a94' }} axisLine={false} tickLine={false} />
             <YAxis yAxisId="pct" width={44} orientation="right" domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fontSize: 11, fill: '#7C3AED' }} axisLine={false} tickLine={false} />
             <Tooltip content={<ChartTooltip />} />
-            <Legend iconType="square" iconSize={8} wrapperStyle={{ fontSize: 12, color: '#9b9a94', paddingTop: 12 }} />
+            <Legend content={<ChartLegend />} />
             {/* Hidden bar for total — used in tooltip only */}
             <Bar yAxisId="count" dataKey="total"     name="total"     stackId="a" fill="transparent" legendType="none" />
-            <Bar yAxisId="count" dataKey="delivered" name="Delivered" stackId="s" fill={STATUS_COLORS.delivered} opacity={0.85} radius={[0,0,0,0]} />
-            <Bar yAxisId="count" dataKey="improved"  name="Improved"  stackId="s" fill={STATUS_COLORS.improved}  opacity={0.85} />
-            <Bar yAxisId="count" dataKey="exempted"  name="Exempted"  stackId="s" fill={STATUS_COLORS.exempted}  opacity={0.85} />
-            <Bar yAxisId="count" dataKey="missed"    name="Missed"    stackId="s" fill={STATUS_COLORS.missed}    opacity={0.85} />
-            <Bar yAxisId="count" dataKey="pending"   name="Pending"   stackId="s" fill={STATUS_COLORS.pending}   opacity={0.85} radius={[3,3,0,0]} />
+            {ACTION_STAGES.map((stage, i) => (
+              <Bar key={stage.field} yAxisId="count" dataKey={stage.field} name={stage.label} stackId="s" fill={stage.color} opacity={0.9} radius={i === ACTION_STAGES.length - 1 ? [3,3,0,0] : [0,0,0,0]} />
+            ))}
             <Line yAxisId="pct" type="monotone" dataKey="completionPct" name="Delivery %" stroke="#7C3AED" strokeWidth={2} dot={{ r: 3, fill: '#7C3AED' }} legendType="none" />
           </ComposedChart>
         </ResponsiveContainer>
@@ -513,7 +576,7 @@ export const CoachingInsights = () => {
                       boxShadow: '0 1px 1px rgba(0,0,0,0.08), 0 8px 10px rgba(0,0,0,0.08)',
                     }}
                   />
-                  <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, color: '#444', paddingTop: 12 }} />
+                  <Legend content={<ChartLegend cols={2} />} />
                 </PieChart>
               </ResponsiveContainer>
             )
