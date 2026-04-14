@@ -1,5 +1,5 @@
 import { Retool } from '@tryretool/custom-component-support';
-import { useMemo } from 'react';
+import React, { useMemo } from 'react';
 import AdvancedInsightsGrid from './grid'
 import { AdvancedRow } from '../../utils/types';
 import { GridState } from 'ag-grid-enterprise';

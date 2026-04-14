@@ -1,6 +1,6 @@
 
 import { Retool } from '@tryretool/custom-component-support'
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 
 import styles from '../../styles/insights.module.css'
 import { AdvancedRow, AdvancedInsightsGridProps } from '../../utils/types'
