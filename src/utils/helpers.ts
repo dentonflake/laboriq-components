@@ -1,5 +1,7 @@
 
-import { IAggFuncParams } from 'ag-grid-community'
+import { IAggFuncParams, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'
+import { LicenseManager, AllEnterpriseModule, IntegratedChartsModule } from 'ag-grid-enterprise'
+import { AgChartsEnterpriseModule } from 'ag-charts-enterprise'
 
 export const parseHour = (value: string) => {
 
@@ -180,5 +182,35 @@ export const actualRateMPPAggregation = (params: IAggFuncParams) => {
     points,
     hours,
     value
+  }
+}
+
+// ── AG Grid initialization ────────────────────────────────────────────────────
+
+let appliedAgGridLicenseKey: string | null = null
+let hasWarnedMissingAgGridLicense = false
+let hasRegisteredAgGridModules = false
+
+const applyAgGridLicense = (rawLicenseKey?: string) => {
+  const licenseKey = String(rawLicenseKey ?? '').trim()
+  if (licenseKey) {
+    if (appliedAgGridLicenseKey !== licenseKey) {
+      LicenseManager.setLicenseKey(licenseKey)
+      appliedAgGridLicenseKey = licenseKey
+    }
+    hasWarnedMissingAgGridLicense = false
+    return
+  }
+  if (!hasWarnedMissingAgGridLicense) {
+    console.warn('AG Grid License Key not provided. Please set the "agGridLicenseKey" state variable to enable enterprise features.')
+    hasWarnedMissingAgGridLicense = true
+  }
+}
+
+export const ensureAgGridInitialized = (rawLicenseKey?: string) => {
+  applyAgGridLicense(rawLicenseKey)
+  if (!hasRegisteredAgGridModules) {
+    ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule, IntegratedChartsModule.with(AgChartsEnterpriseModule)])
+    hasRegisteredAgGridModules = true
   }
 }

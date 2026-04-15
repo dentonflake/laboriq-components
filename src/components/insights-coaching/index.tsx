@@ -3,29 +3,11 @@ import { AgGridReact } from 'ag-grid-react'
 import type { TooltipProps } from 'recharts'
 import React, { useMemo, useRef, useCallback } from 'react'
 import { Retool } from '@tryretool/custom-component-support'
-import { AgChartsEnterpriseModule } from 'ag-charts-enterprise'
 import type { ValueType, NameType } from 'recharts/types/component/DefaultTooltipContent'
-import { ColDef, ModuleRegistry, AllCommunityModule, themeQuartz } from 'ag-grid-community'
-import { LicenseManager, AllEnterpriseModule, IntegratedChartsModule } from 'ag-grid-enterprise'
+import { ColDef, themeQuartz } from 'ag-grid-community'
 import { ComposedChart, BarChart, PieChart, Pie, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts'
 import { CheckCircleIcon, XCircleIcon, ClockIcon, ShieldExclamationIcon, ClipboardDocumentListIcon, ArrowTrendingUpIcon } from '@heroicons/react/24/outline'
-
-// ── AG Grid init ──────────────────────────────────────────────────────────────
-
-let appliedLicenseKey: string | null = null
-let hasRegisteredModules = false
-
-const ensureAgGridInitialized = (licenseKey?: string) => {
-  const key = String(licenseKey ?? '').trim()
-  if (key && key !== appliedLicenseKey) {
-    LicenseManager.setLicenseKey(key)
-    appliedLicenseKey = key
-  }
-  if (!hasRegisteredModules) {
-    ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule, IntegratedChartsModule.with(AgChartsEnterpriseModule)])
-    hasRegisteredModules = true
-  }
-}
+import { ensureAgGridInitialized } from '../../utils/helpers'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -98,6 +80,8 @@ type InsightsState = {
   exemptionData: { type: string; count: number }[]
 }
 
+// ── Constants (component display only) ───────────────────────────────────────
+
 const EMPTY_STATE: InsightsState = {
   config: { actions: [], severities: [], exemptionTypes: [] },
   totals: { total: 0, completed: 0, improved: 0, exempted: 0, missed: 0, pending: 0, completedPct: 0, improvedPct: 0, exemptedPct: 0, missedPct: 0, pendingPct: 0 },
@@ -107,8 +91,6 @@ const EMPTY_STATE: InsightsState = {
   exemptionRows: [],
   exemptionData: [],
 }
-
-// ── Constants (component display only) ───────────────────────────────────────
 
 const STATUS_COLORS = {
   delivered: '#3B6D11',
@@ -144,16 +126,7 @@ const SectionTitle = ({ children, style }: { children: React.ReactNode, style?: 
   </div>
 )
 
-type StatProps = {
-  label: string
-  value: number
-  pct?: number
-  sub: string
-  accent: string
-  icon: React.ElementType
-}
-
-const StatCard = ({ label, value, pct, sub, accent, icon: Icon }: StatProps) => (
+const StatCard = ({ label, value, pct, sub, accent, icon: Icon }: { label: string, value: number, pct?: number, sub: string, accent: string, icon: React.ElementType }) => (
   <div style={{
     background: '#fff', borderRadius: 10, padding: '16px 18px',
     boxShadow: '0 1px 1px rgba(0,0,0,0.08), 0 8px 10px rgba(0,0,0,0.08)',
@@ -210,32 +183,59 @@ const ChartTooltip = ({ active, payload, label }: TooltipProps<ValueType, NameTy
   )
 }
 
-type LegendPayloadItem = { value: string, color: string }
-
-const ChartLegend = ({ payload, cols = 6 }: { payload?: LegendPayloadItem[], cols?: number }) => {
-
+const ChartLegend = ({ payload }: { payload?: { value: string, color: string }[] }) => {
   if (!payload?.length) return null
-  
   const items = payload.filter(p => p.value !== 'total' && p.value !== 'Delivery %')
-  const rows = Math.ceil(items.length / cols)
-  const columns: LegendPayloadItem[][] = Array.from({ length: cols }, (_, col) =>
-    items.slice(col * rows, col * rows + rows)
-  ).filter(col => col.length > 0)
   return (
-    <div style={{ display: 'flex', gap: 32, paddingTop: 14, justifyContent: 'center' }}>
-      {columns.map((col, ci) => (
-        <div key={ci} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          {col.map(item => (
-            <div key={item.value} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#555', whiteSpace: 'nowrap' }}>
-              <span style={{ width: 8, height: 8, borderRadius: 2, background: item.color, flexShrink: 0, display: 'inline-block' }} />
-              {item.value}
-            </div>
-          ))}
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px 32px', paddingTop: 14, justifyContent: 'center' }}>
+      {items.map(item => (
+        <div key={item.value} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#555', whiteSpace: 'nowrap' }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, background: item.color, flexShrink: 0, display: 'inline-block' }} />
+          {item.value}
         </div>
       ))}
     </div>
   )
 }
+
+// ── Column definitions ────────────────────────────────────────────────────────
+
+const performanceColDefs: ColDef[] = [
+  { field: 'location',   rowGroup: true, hide: true },
+  { field: 'supervisor', rowGroup: true, hide: true },
+  { field: 'employee',   headerName: 'Employee' },
+  { field: 'total',      headerName: 'Total',     aggFunc: 'sum' },
+  { field: 'delivered',  headerName: 'Delivered', aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.delivered } },
+  { field: 'improved',   headerName: 'Improved',  aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.improved } },
+  { field: 'exempted',   headerName: 'Exempted',  aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.exempted } },
+  { field: 'missed',     headerName: 'Missed',    aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.missed } },
+  { field: 'pending',    headerName: 'Pending',   aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.pending } },
+  {
+    headerName: 'Delivery %',
+    valueGetter: params => {
+      const delivered = params.node?.group ? (params.node.aggData?.delivered ?? 0) : (params.data?.delivered ?? 0)
+      const total     = params.node?.group ? (params.node.aggData?.total     ?? 0) : (params.data?.total     ?? 1)
+      return total ? Math.round(delivered / total * 100) : 0
+    },
+    valueFormatter: params => `${params.value}%`,
+  },
+  { field: 'timeToViewed',    headerName: 'Time to Viewed',    aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
+  { field: 'timeToReviewed',  headerName: 'Time to Reviewed',  aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
+  { field: 'timeToRequested', headerName: 'Time to Requested', aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
+  { field: 'timeToDelivered', headerName: 'Time to Delivered', aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
+  { field: 'timeToExempted',  headerName: 'Time to Exempted',  aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
+]
+
+const exemptionColDefs: ColDef[] = [
+  { field: 'date',           headerName: 'Date',              pinned: 'left', sort: 'desc', sortIndex: 0 },
+  { field: 'supervisor',     headerName: 'Supervisor',        pinned: 'left', sort: 'asc',  sortIndex: 1 },
+  { field: 'employee',       headerName: 'Employee' },
+  { field: 'location',       headerName: 'Location' },
+  { field: 'severityLabel',  headerName: 'Severity' },
+  { field: 'exemptionType',  headerName: 'Exemption Type' },
+  { field: 'requesterNotes', headerName: "Requester's Notes", wrapText: true, autoHeight: true, maxWidth: 320, cellStyle: { display: 'flex', alignItems: 'flex-start', whiteSpace: 'normal', lineHeight: '1.4', paddingTop: 8, paddingBottom: 8 } },
+  { field: 'notes',          headerName: "Approver's Notes",  wrapText: true, autoHeight: true, maxWidth: 320, cellStyle: { display: 'flex', alignItems: 'flex-start', whiteSpace: 'normal', lineHeight: '1.4', paddingTop: 8, paddingBottom: 8 } },
+]
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -274,43 +274,6 @@ const CoachingInsights = () => {
       .filter(d => d.value > 0),
     [severityData, config.severities],
   )
-
-  const performanceColDefs = useMemo<ColDef[]>(() => [
-    { field: 'location',   rowGroup: true, hide: true },
-    { field: 'supervisor', rowGroup: true, hide: true },
-    { field: 'employee',   headerName: 'Employee' },
-    { field: 'total',      headerName: 'Total',     aggFunc: 'sum' },
-    { field: 'delivered',  headerName: 'Delivered', aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.delivered } },
-    { field: 'improved',   headerName: 'Improved',  aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.improved } },
-    { field: 'exempted',   headerName: 'Exempted',  aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.exempted } },
-    { field: 'missed',     headerName: 'Missed',    aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.missed } },
-    { field: 'pending',    headerName: 'Pending',   aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.pending } },
-    {
-      headerName: 'Delivery %',
-      valueGetter: params => {
-        const delivered = params.node?.group ? (params.node.aggData?.delivered ?? 0) : (params.data?.delivered ?? 0)
-        const total     = params.node?.group ? (params.node.aggData?.total     ?? 0) : (params.data?.total     ?? 1)
-        return total ? Math.round(delivered / total * 100) : 0
-      },
-      valueFormatter: params => `${params.value}%`,
-    },
-    { field: 'timeToViewed',    headerName: 'Time to Viewed',    aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
-    { field: 'timeToReviewed',  headerName: 'Time to Reviewed',  aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
-    { field: 'timeToRequested', headerName: 'Time to Requested', aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
-    { field: 'timeToDelivered', headerName: 'Time to Delivered', aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
-    { field: 'timeToExempted',  headerName: 'Time to Exempted',  aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
-  ], [])
-
-  const exemptionColDefs = useMemo<ColDef[]>(() => [
-    { field: 'date',           headerName: 'Date',              pinned: 'left', sort: 'desc', sortIndex: 0 },
-    { field: 'supervisor',     headerName: 'Supervisor',        pinned: 'left', sort: 'asc',  sortIndex: 1 },
-    { field: 'employee',       headerName: 'Employee' },
-    { field: 'location',       headerName: 'Location' },
-    { field: 'severityLabel',  headerName: 'Severity' },
-    { field: 'exemptionType',  headerName: 'Exemption Type' },
-    { field: 'requesterNotes', headerName: "Requester's Notes", wrapText: true, autoHeight: true, maxWidth: 320, cellStyle: { display: 'flex', alignItems: 'flex-start', whiteSpace: 'normal', lineHeight: '1.4', paddingTop: 8, paddingBottom: 8 } },
-    { field: 'notes',          headerName: "Approver's Notes",  wrapText: true, autoHeight: true, maxWidth: 320, cellStyle: { display: 'flex', alignItems: 'flex-start', whiteSpace: 'normal', lineHeight: '1.4', paddingTop: 8, paddingBottom: 8 } },
-  ], [])
 
   return (
     <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', background: '#FBFBFC', minHeight: '100vh', padding: '20px 20px' }}>
@@ -407,7 +370,7 @@ const CoachingInsights = () => {
                       boxShadow: '0 1px 1px rgba(0,0,0,0.08), 0 8px 10px rgba(0,0,0,0.08)',
                     }}
                   />
-                  <Legend content={<ChartLegend cols={2} />} />
+                  <Legend content={<ChartLegend />} />
                 </PieChart>
               </ResponsiveContainer>
             )
@@ -429,7 +392,6 @@ const CoachingInsights = () => {
             autoGroupColumnDef={{ headerName: 'Location / Supervisor', minWidth: 220, pinned: 'left' }}
             suppressAggFuncInHeader
             groupDefaultExpanded={1}
-            enableCharts
             cellSelection
             onFirstDataRendered={onPerfFirstDataRendered}
           />
@@ -446,7 +408,6 @@ const CoachingInsights = () => {
             columnDefs={exemptionColDefs}
             theme={themeQuartz}
             defaultColDef={{ resizable: true, filter: true, sortable: true, cellStyle: { display: 'flex', alignItems: 'center' } }}
-            enableCharts
             cellSelection
             onFirstDataRendered={onFirstDataRendered}
           />

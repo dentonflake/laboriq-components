@@ -4,44 +4,10 @@ import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 
 import styles from '../../styles/insights.module.css'
 import { ActionRow, ActionInsightsGridProps } from '../../utils/types'
-import { actionCount, distinctEmployees, parseHour } from '../../utils/helpers'
+import { actionCount, distinctEmployees, ensureAgGridInitialized, parseHour } from '../../utils/helpers'
 
 import { AgGridReact } from 'ag-grid-react'
-import { AgChartsEnterpriseModule } from "ag-charts-enterprise"
-import { LicenseManager, AllEnterpriseModule, IntegratedChartsModule } from 'ag-grid-enterprise'
-import { ColDef, ModuleRegistry, StateUpdatedEvent, AllCommunityModule, themeQuartz } from 'ag-grid-community'
-
-let appliedAgGridLicenseKey: string | null = null
-let hasWarnedMissingAgGridLicense = false
-let hasRegisteredAgGridModules = false
-
-const applyAgGridLicense = (rawLicenseKey?: string) => {
-  const licenseKey = String(rawLicenseKey ?? '').trim()
-
-  if (licenseKey) {
-    if (appliedAgGridLicenseKey !== licenseKey) {
-      LicenseManager.setLicenseKey(licenseKey)
-      appliedAgGridLicenseKey = licenseKey
-    }
-    hasWarnedMissingAgGridLicense = false
-    return
-  }
-
-  if (!hasWarnedMissingAgGridLicense) {
-    console.warn('AG Grid License Key not provided. Please set the "agGridLicenseKey" state variable to enable enterprise features.')
-    hasWarnedMissingAgGridLicense = true
-  }
-}
-
-const ensureAgGridInitialized = (rawLicenseKey?: string) => {
-  // Enforce order: license first, modules second.
-  applyAgGridLicense(rawLicenseKey)
-
-  if (!hasRegisteredAgGridModules) {
-    ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule, IntegratedChartsModule.with(AgChartsEnterpriseModule)])
-    hasRegisteredAgGridModules = true
-  }
-}
+import { ColDef, StateUpdatedEvent, themeQuartz } from 'ag-grid-community'
 
 const ActionInsightsGrid = ({ rowData, gridState, agGridLicenseKey }: ActionInsightsGridProps) => {
 

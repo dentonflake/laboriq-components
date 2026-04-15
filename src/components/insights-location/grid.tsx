@@ -1,44 +1,11 @@
-import { ColDef, ModuleRegistry, StateUpdatedEvent, AllCommunityModule, themeQuartz, IAggFuncParams, IHeaderParams, ITooltipParams, IRowNode } from 'ag-grid-community'
-import { LicenseManager, AllEnterpriseModule, IntegratedChartsModule } from 'ag-grid-enterprise'
-import { useMemo, useCallback, useRef, useEffect, useState, KeyboardEventHandler } from 'react'
-import { AgChartsEnterpriseModule } from "ag-charts-enterprise"
+import { ColDef, StateUpdatedEvent, themeQuartz, IAggFuncParams, IHeaderParams, ITooltipParams, IRowNode } from 'ag-grid-community'
+import React, { useMemo, useCallback, useRef, useEffect, useState, KeyboardEventHandler } from 'react'
 import { Retool } from '@tryretool/custom-component-support'
 import { AgGridReact } from 'ag-grid-react'
 
 import styles from '../../styles/insights.module.css'
 import { LocationRow, LocationInsightsGridProps } from '../../utils/types'
-
-let appliedAgGridLicenseKey: string | null = null
-let hasWarnedMissingAgGridLicense = false
-let hasRegisteredAgGridModules = false
-
-const applyAgGridLicense = (rawLicenseKey?: string) => {
-  const licenseKey = String(rawLicenseKey ?? '').trim()
-
-  if (licenseKey) {
-    if (appliedAgGridLicenseKey !== licenseKey) {
-      LicenseManager.setLicenseKey(licenseKey)
-      appliedAgGridLicenseKey = licenseKey
-    }
-    hasWarnedMissingAgGridLicense = false
-    return
-  }
-
-  if (!hasWarnedMissingAgGridLicense) {
-    console.warn('AG Grid License Key not provided. Please set the "agGridLicenseKey" state variable to enable enterprise features.')
-    hasWarnedMissingAgGridLicense = true
-  }
-}
-
-const ensureAgGridInitialized = (rawLicenseKey?: string) => {
-  // Enforce order: license first, modules second.
-  applyAgGridLicense(rawLicenseKey)
-
-  if (!hasRegisteredAgGridModules) {
-    ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule, IntegratedChartsModule.with(AgChartsEnterpriseModule)])
-    hasRegisteredAgGridModules = true
-  }
-}
+import { ensureAgGridInitialized } from '../../utils/helpers'
 
 type HeaderWithCaptionProps = IHeaderParams & {
   caption?: string

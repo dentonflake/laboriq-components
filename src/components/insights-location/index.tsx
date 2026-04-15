@@ -1,6 +1,6 @@
 import { Retool } from '@tryretool/custom-component-support'
 import { GridState } from 'ag-grid-enterprise'
-import { useMemo } from 'react'
+import React, { useMemo } from 'react'
 
 import { LocationRow } from '../../utils/types'
 import LocationInsightsGrid from './grid'
