@@ -16,14 +16,11 @@ let appliedLicenseKey: string | null = null
 let hasRegisteredModules = false
 
 const ensureAgGridInitialized = (licenseKey?: string) => {
-
   const key = String(licenseKey ?? '').trim()
-
   if (key && key !== appliedLicenseKey) {
     LicenseManager.setLicenseKey(key)
     appliedLicenseKey = key
   }
-
   if (!hasRegisteredModules) {
     ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule, IntegratedChartsModule.with(AgChartsEnterpriseModule)])
     hasRegisteredModules = true
@@ -32,25 +29,21 @@ const ensureAgGridInitialized = (licenseKey?: string) => {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+type ActionConfig    = { value: string; label: string; chartColor: string }
+type SeverityConfig  = { value: number; label: string; color: string }
+type ExemptionConfig = { value: string; color: string }
+
+type Config = {
+  actions: ActionConfig[]
+  severities: SeverityConfig[]
+  exemptionTypes: ExemptionConfig[]
+}
+
 type WeeklyDataPoint = {
   week: string
   total: number
   completionPct: number
-  initiated: number
-  viewed: number
-  reviewed: number
-  override_requested: number
-  override_request_cancelled: number
-  override_denied: number
-  override_approved: number
-  exemption_requested: number
-  exemption_request_cancelled: number
-  exemption_denied: number
-  journal_created: number
-  missed: number
-  exempted: number
-  delivered: number
-  improved: number
+  [key: string]: number | string
 }
 
 type Totals = {
@@ -96,6 +89,7 @@ type ExemptionRow = {
 }
 
 type InsightsState = {
+  config: Config
   totals: Totals
   weeklyData: WeeklyDataPoint[]
   severityData: { severity: number; value: number }[]
@@ -105,6 +99,7 @@ type InsightsState = {
 }
 
 const EMPTY_STATE: InsightsState = {
+  config: { actions: [], severities: [], exemptionTypes: [] },
   totals: { total: 0, completed: 0, improved: 0, exempted: 0, missed: 0, pending: 0, completedPct: 0, improvedPct: 0, exemptedPct: 0, missedPct: 0, pendingPct: 0 },
   weeklyData: [],
   severityData: [],
@@ -113,45 +108,15 @@ const EMPTY_STATE: InsightsState = {
   exemptionData: [],
 }
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── Constants (component display only) ───────────────────────────────────────
 
-const SEVERITY_LEVELS: Record<number, { label: string, color: string }> = {
-  1: { label: 'Coaching 1',              color: '#93C5FD' },
-  2: { label: 'Coaching 2',              color: '#60A5FA' },
-  3: { label: '1st Corrective Action',   color: '#FDE047' },
-  4: { label: '2nd Corrective Action',   color: '#F59E0B' },
-  5: { label: 'Final Corrective Action', color: '#F87171' },
-  6: { label: 'Termination',             color: '#374151' },
+const STATUS_COLORS = {
+  delivered: '#3B6D11',
+  improved:  '#1D9E75',
+  exempted:  '#854F0B',
+  missed:    '#E24B4A',
+  pending:   '#185FA5',
 }
-
-const EXEMP_PALETTE = [
-  '#378ADD',
-  '#1D9E75',
-  '#7C3AED',
-  '#D85A30',
-  '#E24B4A',
-  '#854F0B', 
-  '#185FA5',
-  '#3B6D11'
-]
-
-const ACTION_STAGES = [
-  { field: 'initiated',                   label: 'Initiated',                   color: '#DBEAFE' },
-  { field: 'viewed',                      label: 'Viewed',                      color: '#93C5FD' },
-  { field: 'reviewed',                    label: 'Reviewed',                    color: '#60A5FA' },
-  { field: 'override_requested',          label: 'Override Requested',          color: '#3B82F6' },
-  { field: 'override_request_cancelled',  label: 'Override Request Cancelled',  color: '#94A3B8' },
-  { field: 'override_denied',             label: 'Override Denied',             color: '#FB923C' },
-  { field: 'override_approved',           label: 'Override Approved',           color: '#6EE7B7' },
-  { field: 'exemption_requested',         label: 'Exemption Requested',         color: '#818CF8' },
-  { field: 'exemption_request_cancelled', label: 'Exemption Request Cancelled', color: '#94A3B8' },
-  { field: 'exemption_denied',            label: 'Exemption Denied',            color: '#FB923C' },
-  { field: 'journal_created',             label: 'Journal Created',             color: '#A78BFA' },
-  { field: 'missed',                      label: 'Missed',                      color: '#E24B4A' },
-  { field: 'exempted',                    label: 'Exempted',                    color: '#854F0B' },
-  { field: 'delivered',                   label: 'Delivered',                   color: '#3B6D11' },
-  { field: 'improved',                    label: 'Improved',                    color: '#1D9E75' },
-] as const
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -207,14 +172,6 @@ const StatCard = ({ label, value, pct, sub, accent, icon: Icon }: StatProps) => 
   </div>
 )
 
-const STATUS_COLORS = {
-  delivered: '#3B6D11',
-  improved:  '#1D9E75',
-  exempted:  '#854F0B',
-  missed:    '#E24B4A',
-  pending:   '#185FA5',
-}
-
 const TruncatedTick = ({ x, y, payload }: { x?: number, y?: number, payload?: { value: string } }) => {
   const text = payload?.value ?? ''
   const truncated = text.length > 22 ? text.slice(0, 21) + '…' : text
@@ -256,7 +213,9 @@ const ChartTooltip = ({ active, payload, label }: TooltipProps<ValueType, NameTy
 type LegendPayloadItem = { value: string, color: string }
 
 const ChartLegend = ({ payload, cols = 6 }: { payload?: LegendPayloadItem[], cols?: number }) => {
+
   if (!payload?.length) return null
+  
   const items = payload.filter(p => p.value !== 'total' && p.value !== 'Delivery %')
   const rows = Math.ceil(items.length / cols)
   const columns: LegendPayloadItem[][] = Array.from({ length: cols }, (_, col) =>
@@ -280,13 +239,14 @@ const ChartLegend = ({ payload, cols = 6 }: { payload?: LegendPayloadItem[], col
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export const CoachingInsights = () => {
+const CoachingInsights = () => {
   const [state] = Retool.useStateObject({ name: 'data', label: 'Data Source' })
   const [rawLicenseKey] = Retool.useStateString({ name: 'agGridLicenseKey', label: 'AG Grid License Key' })
 
   ensureAgGridInitialized(rawLicenseKey as string)
 
   const {
+    config          = EMPTY_STATE.config,
     totals          = EMPTY_STATE.totals,
     weeklyData      = [],
     severityData    = [],
@@ -301,16 +261,18 @@ export const CoachingInsights = () => {
   const perfGridRef = useRef<AgGridReact>(null)
   const onPerfFirstDataRendered = useCallback(() => perfGridRef.current?.api.autoSizeAllColumns(), [])
 
-  // Map severity numbers to chart-ready labels and colors
   const severityChartData = useMemo(() =>
     severityData
-      .map(({ severity, value }) => ({
-        name: SEVERITY_LEVELS[severity]?.label ?? `Level ${severity}`,
-        value,
-        fill: SEVERITY_LEVELS[severity]?.color ?? '#94A3B8',
-      }))
+      .map(({ severity, value }) => {
+        const cfg = config.severities.find(s => s.value === severity)
+        return {
+          name: cfg?.label ?? `Level ${severity}`,
+          value,
+          fill: cfg?.color ?? '#94A3B8',
+        }
+      })
       .filter(d => d.value > 0),
-    [severityData],
+    [severityData, config.severities],
   )
 
   const performanceColDefs = useMemo<ColDef[]>(() => [
@@ -375,9 +337,13 @@ export const CoachingInsights = () => {
             <Tooltip content={<ChartTooltip />} />
             <Legend content={<ChartLegend />} />
             <Bar yAxisId="count" dataKey="total" name="total" stackId="a" fill="transparent" legendType="none" />
-            {ACTION_STAGES.map((stage, i) => (
-              <Bar key={stage.field} yAxisId="count" dataKey={stage.field} name={stage.label} stackId="s" fill={stage.color} opacity={0.9} radius={i === ACTION_STAGES.length - 1 ? [3,3,0,0] : [0,0,0,0]} />
-            ))}
+            {config.actions.map((action, i) => {
+              const field = action.value.replace(/ /g, '_')
+              const isLast = i === config.actions.length - 1
+              return (
+                <Bar key={field} yAxisId="count" dataKey={field} name={action.label} stackId="s" fill={action.chartColor} opacity={0.9} radius={isLast ? [3, 3, 0, 0] : [0, 0, 0, 0]} />
+              )
+            })}
             <Line yAxisId="pct" type="monotone" dataKey="completionPct" name="Delivery %" stroke="#7C3AED" strokeWidth={2} dot={{ r: 3, fill: '#7C3AED' }} legendType="none" />
           </ComposedChart>
         </ResponsiveContainer>
@@ -428,9 +394,10 @@ export const CoachingInsights = () => {
                     outerRadius={100}
                     innerRadius={48}
                   >
-                    {exemptionData.map((_, i) => (
-                      <Cell key={i} fill={EXEMP_PALETTE[i % EXEMP_PALETTE.length]} />
-                    ))}
+                    {exemptionData.map((entry, i) => {
+                      const cfg = config.exemptionTypes.find(et => et.value === entry.type)
+                      return <Cell key={i} fill={cfg?.color ?? '#94A3B8'} />
+                    })}
                   </Pie>
                   <Tooltip
                     formatter={(value: number, name: string) => [value, name]}
@@ -489,3 +456,5 @@ export const CoachingInsights = () => {
     </div>
   )
 }
+
+export default CoachingInsights
