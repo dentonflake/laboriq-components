@@ -418,4 +418,4 @@ const CoachingInsights = () => {
   )
 }
 
-export default CoachingInsights
+export { CoachingInsights }
