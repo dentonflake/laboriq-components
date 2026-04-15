@@ -1,24 +1,14 @@
-import { Retool } from '@tryretool/custom-component-support'
+
+import { AgGridReact } from 'ag-grid-react'
+import type { TooltipProps } from 'recharts'
 import React, { useMemo, useRef, useCallback } from 'react'
-import {
-  CheckCircleIcon,
-  XCircleIcon,
-  ClockIcon,
-  ShieldExclamationIcon,
-  ClipboardDocumentListIcon,
-  ArrowTrendingUpIcon,
-} from '@heroicons/react/24/outline'
+import { Retool } from '@tryretool/custom-component-support'
+import { AgChartsEnterpriseModule } from 'ag-charts-enterprise'
+import type { ValueType, NameType } from 'recharts/types/component/DefaultTooltipContent'
 import { ColDef, ModuleRegistry, AllCommunityModule, themeQuartz } from 'ag-grid-community'
 import { LicenseManager, AllEnterpriseModule, IntegratedChartsModule } from 'ag-grid-enterprise'
-import { AgChartsEnterpriseModule } from 'ag-charts-enterprise'
-import { AgGridReact } from 'ag-grid-react'
-import {
-  ComposedChart, BarChart, PieChart, Pie, Bar, Line,
-  XAxis, YAxis, CartesianGrid, Tooltip,
-  Legend, ResponsiveContainer, Cell,
-} from 'recharts'
-import type { TooltipProps } from 'recharts'
-import type { ValueType, NameType } from 'recharts/types/component/DefaultTooltipContent'
+import { ComposedChart, BarChart, PieChart, Pie, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts'
+import { CheckCircleIcon, XCircleIcon, ClockIcon, ShieldExclamationIcon, ClipboardDocumentListIcon, ArrowTrendingUpIcon } from '@heroicons/react/24/outline'
 
 // ── AG Grid init ──────────────────────────────────────────────────────────────
 
@@ -26,11 +16,14 @@ let appliedLicenseKey: string | null = null
 let hasRegisteredModules = false
 
 const ensureAgGridInitialized = (licenseKey?: string) => {
+
   const key = String(licenseKey ?? '').trim()
+
   if (key && key !== appliedLicenseKey) {
     LicenseManager.setLicenseKey(key)
     appliedLicenseKey = key
   }
+
   if (!hasRegisteredModules) {
     ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule, IntegratedChartsModule.with(AgChartsEnterpriseModule)])
     hasRegisteredModules = true
@@ -38,36 +31,6 @@ const ensureAgGridInitialized = (licenseKey?: string) => {
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-
-type CoachingLog = {
-  id: number
-  action: string
-  cargoId: number
-  content: Record<string, unknown> | null
-  createdAt: string
-  createdBy: string
-  rank: number
-}
-
-type Coaching = {
-  coachingId: number
-  employeeId: number
-  employeeStatus: string
-  supervisorId: number
-  createdAt: string
-  type: string
-  severity: number
-  status: string
-  lastAction: string
-  content: Record<string, unknown> | null
-  jobTitle: string
-  tenure: number
-  employee: string
-  supervisor: string
-  locationId: number
-  location: string
-  logs: CoachingLog[]
-}
 
 type WeeklyDataPoint = {
   week: string
@@ -90,14 +53,67 @@ type WeeklyDataPoint = {
   improved: number
 }
 
+type Totals = {
+  total: number
+  completed: number
+  improved: number
+  exempted: number
+  missed: number
+  pending: number
+  completedPct: number
+  improvedPct: number
+  exemptedPct: number
+  missedPct: number
+  pendingPct: number
+}
+
+type PerformanceRow = {
+  location: string
+  supervisor: string
+  employee: string
+  total: number
+  delivered: number
+  improved: number
+  exempted: number
+  missed: number
+  pending: number
+  timeToViewed: number | null
+  timeToReviewed: number | null
+  timeToRequested: number | null
+  timeToDelivered: number | null
+  timeToExempted: number | null
+}
+
+type ExemptionRow = {
+  date: string
+  employee: string
+  supervisor: string
+  location: string
+  severityLabel: string
+  exemptionType: string
+  requesterNotes: string
+  notes: string
+}
+
+type InsightsState = {
+  totals: Totals
+  weeklyData: WeeklyDataPoint[]
+  severityData: { severity: number; value: number }[]
+  performanceRows: PerformanceRow[]
+  exemptionRows: ExemptionRow[]
+  exemptionData: { type: string; count: number }[]
+}
+
+const EMPTY_STATE: InsightsState = {
+  totals: { total: 0, completed: 0, improved: 0, exempted: 0, missed: 0, pending: 0, completedPct: 0, improvedPct: 0, exemptedPct: 0, missedPct: 0, pendingPct: 0 },
+  weeklyData: [],
+  severityData: [],
+  performanceRows: [],
+  exemptionRows: [],
+  exemptionData: [],
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-
-const COMPLETED_ACTIONS = ['delivered']
-const EXEMPTED_ACTIONS  = ['exempted']
-const MISSED_ACTIONS    = ['missed']
-const IMPROVED_ACTIONS  = ['improved']
-
 
 const SEVERITY_LEVELS: Record<number, { label: string, color: string }> = {
   1: { label: 'Coaching 1',              color: '#93C5FD' },
@@ -108,7 +124,16 @@ const SEVERITY_LEVELS: Record<number, { label: string, color: string }> = {
   6: { label: 'Termination',             color: '#374151' },
 }
 
-const EXEMP_PALETTE = ['#378ADD', '#1D9E75', '#7C3AED', '#D85A30', '#E24B4A', '#854F0B', '#185FA5', '#3B6D11']
+const EXEMP_PALETTE = [
+  '#378ADD',
+  '#1D9E75',
+  '#7C3AED',
+  '#D85A30',
+  '#E24B4A',
+  '#854F0B', 
+  '#185FA5',
+  '#3B6D11'
+]
 
 const ACTION_STAGES = [
   { field: 'initiated',                   label: 'Initiated',                   color: '#DBEAFE' },
@@ -128,109 +153,12 @@ const ACTION_STAGES = [
   { field: 'improved',                    label: 'Improved',                    color: '#1D9E75' },
 ] as const
 
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-const isCompleted = (c: Coaching) => COMPLETED_ACTIONS.includes(c.lastAction)
-const isImproved  = (c: Coaching) => IMPROVED_ACTIONS.includes(c.lastAction)
-const isExempted  = (c: Coaching) => EXEMPTED_ACTIONS.includes(c.lastAction)
-const isMissed    = (c: Coaching) => MISSED_ACTIONS.includes(c.lastAction)
-const isPending        = (c: Coaching) => c.status === 'open'
-const getExemptionType = (c: Coaching) => {
-  const log = c.logs.find(l => l.action === 'exempted')
-  return (log?.content?.exemptionType as string) || 'Unknown'
-}
-
-const getExemptionNote = (c: Coaching) => {
-  const log = c.logs.find(l => l.action === 'exempted')
-  return (log?.content?.note as string) || (log?.content?.notes as string) || (log?.content?.reason as string) || '—'
-}
-
-const getRequesterNote = (c: Coaching) => {
-  const log = c.logs.find(l => l.action === 'exemption requested' || l.action === 'override requested')
-  return (log?.content?.note as string) || (log?.content?.notes as string) || (log?.content?.reason as string) || '—'
-}
 
 const fmtHours = (v: number | null) => {
   if (v == null) return '—'
   const n = Number(v)
   return isNaN(n) ? '—' : `${n.toFixed(1)}h`
-}
-
-const hoursFrom = (start: string, end: string) =>
-  (new Date(end).getTime() - new Date(start).getTime()) / (1000 * 60 * 60)
-
-const firstActionHours = (c: Coaching, action: string) => {
-  const log = c.logs.find(l => l.action === action)
-  return log ? hoursFrom(c.createdAt, log.createdAt) : null
-}
-
-const firstAnyActionHours = (c: Coaching, actions: string[]) => {
-  const times = c.logs
-    .filter(l => actions.includes(l.action))
-    .map(l => hoursFrom(c.createdAt, l.createdAt))
-  return times.length ? Math.min(...times) : null
-}
-
-const formatDate = (dateStr: string) => {
-  const d = new Date(dateStr)
-  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`
-}
-
-// Returns the Monday of the week containing the given date, at midnight.
-const getMondayOf = (date: Date): Date => {
-  const d = new Date(date)
-  d.setHours(0, 0, 0, 0)
-  const day = d.getDay() // 0=Sun, 1=Mon … 6=Sat
-  d.setDate(d.getDate() - (day + 6) % 7)
-  return d
-}
-
-
-const buildWeeklyData = (coachings: Coaching[]): WeeklyDataPoint[] => {
-  if (!coachings.length) return []
-
-  const dates = coachings.map(c => new Date(c.createdAt).getTime())
-  const start = getMondayOf(new Date(Math.min(...dates)))
-  const end   = new Date(Math.max(...dates))
-  const weeks: WeeklyDataPoint[] = []
-  const cursor = new Date(start)
-
-  while (cursor <= end) {
-    const weekStart = new Date(cursor)
-    const weekEnd   = new Date(cursor)
-    weekEnd.setDate(weekEnd.getDate() + 7)
-
-    const inWeek   = coachings.filter(c => { const d = new Date(c.createdAt); return d >= weekStart && d < weekEnd })
-    const total    = inWeek.length
-    const by       = (action: string) => inWeek.filter(c => c.lastAction === action).length
-    const delivered = by('delivered')
-
-    weeks.push({
-      week: `${weekStart.getMonth() + 1}/${weekStart.getDate()}`,
-      total,
-      completionPct:              total ? Math.round(delivered / total * 100) : 0,
-      initiated:                  by('initiated'),
-      viewed:                     by('viewed'),
-      reviewed:                   by('reviewed'),
-      override_requested:         by('override requested'),
-      override_request_cancelled: by('override request cancelled'),
-      override_denied:            by('override denied'),
-      override_approved:          by('override approved'),
-      exemption_requested:        by('exemption requested'),
-      exemption_request_cancelled:by('exemption request cancelled'),
-      exemption_denied:           by('exemption denied'),
-      journal_created:            by('journal created'),
-      missed:                     by('missed'),
-      exempted:                   by('exempted'),
-      delivered,
-      improved:                   by('improved'),
-    })
-
-    cursor.setDate(cursor.getDate() + 7)
-  }
-
-  return weeks.filter(w => w.total > 0)
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -278,7 +206,6 @@ const StatCard = ({ label, value, pct, sub, accent, icon: Icon }: StatProps) => 
     <div style={{ fontSize: 12, color: '#b8b7b0', marginTop: 7 }}>{sub}</div>
   </div>
 )
-
 
 const STATUS_COLORS = {
   delivered: '#3B6D11',
@@ -354,13 +281,19 @@ const ChartLegend = ({ payload, cols = 6 }: { payload?: LegendPayloadItem[], col
 // ── Main component ────────────────────────────────────────────────────────────
 
 export const CoachingInsights = () => {
-  const [rawData] = Retool.useStateArray({ name: 'data', label: 'Data Source' })
+  const [state] = Retool.useStateObject({ name: 'data', label: 'Data Source' })
   const [rawLicenseKey] = Retool.useStateString({ name: 'agGridLicenseKey', label: 'AG Grid License Key' })
 
-  const agGridLicenseKey = rawLicenseKey as string
-  ensureAgGridInitialized(agGridLicenseKey)
+  ensureAgGridInitialized(rawLicenseKey as string)
 
-  const coachings = useMemo(() => rawData as Coaching[], [JSON.stringify(rawData)])
+  const {
+    totals          = EMPTY_STATE.totals,
+    weeklyData      = [],
+    severityData    = [],
+    performanceRows = [],
+    exemptionRows   = [],
+    exemptionData   = [],
+  } = (state as InsightsState) ?? EMPTY_STATE
 
   const gridRef = useRef<AgGridReact>(null)
   const onFirstDataRendered = useCallback(() => gridRef.current?.api.autoSizeAllColumns(), [])
@@ -368,55 +301,16 @@ export const CoachingInsights = () => {
   const perfGridRef = useRef<AgGridReact>(null)
   const onPerfFirstDataRendered = useCallback(() => perfGridRef.current?.api.autoSizeAllColumns(), [])
 
-  const totals = useMemo(() => {
-    const total     = coachings.length
-    const completed = coachings.filter(isCompleted).length
-    const improved  = coachings.filter(isImproved).length
-    const exempted  = coachings.filter(isExempted).length
-    const missed    = coachings.filter(isMissed).length
-    const pending   = coachings.filter(isPending).length
-    const pct = (n: number) => total ? Math.round(n / total * 100) : 0
-    return {
-      total, completed, improved, exempted, missed, pending,
-      completedPct: pct(completed),
-      improvedPct:  pct(improved),
-      exemptedPct:  pct(exempted),
-      missedPct:    pct(missed),
-      pendingPct:   pct(pending),
-    }
-  }, [coachings])
-
-  const weeklyData = useMemo(() => buildWeeklyData(coachings), [coachings])
-
-  const severityData = useMemo(() =>
-    Object.entries(SEVERITY_LEVELS)
-      .map(([sev, { label, color }]) => ({
-        name:  label,
-        value: coachings.filter(c => c.severity === Number(sev)).length,
-        fill:  color,
+  // Map severity numbers to chart-ready labels and colors
+  const severityChartData = useMemo(() =>
+    severityData
+      .map(({ severity, value }) => ({
+        name: SEVERITY_LEVELS[severity]?.label ?? `Level ${severity}`,
+        value,
+        fill: SEVERITY_LEVELS[severity]?.color ?? '#94A3B8',
       }))
       .filter(d => d.value > 0),
-    [coachings],
-  )
-
-  const performanceRows = useMemo(() =>
-    coachings.map(c => ({
-      location:   c.location   || 'Unknown',
-      supervisor: c.supervisor || 'Unknown',
-      employee:   c.employee,
-      total:      1,
-      delivered:  isCompleted(c) ? 1 : 0,
-      improved:   isImproved(c)  ? 1 : 0,
-      exempted:   isExempted(c)  ? 1 : 0,
-      missed:     isMissed(c)    ? 1 : 0,
-      pending:    isPending(c)   ? 1 : 0,
-      timeToViewed:    firstActionHours(c, 'viewed'),
-      timeToReviewed:  firstActionHours(c, 'reviewed'),
-      timeToRequested: firstAnyActionHours(c, ['override requested', 'exemption requested']),
-      timeToDelivered: firstActionHours(c, 'delivered'),
-      timeToExempted:  firstActionHours(c, 'exempted'),
-    })),
-    [coachings],
+    [severityData],
   )
 
   const performanceColDefs = useMemo<ColDef[]>(() => [
@@ -445,57 +339,28 @@ export const CoachingInsights = () => {
     { field: 'timeToExempted',  headerName: 'Time to Exempted',  aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
   ], [])
 
-  const exemptionRows = useMemo(() =>
-    coachings
-      .filter(isExempted)
-      .map(c => ({
-        date:          formatDate(c.logs.find(l => l.action === 'exempted')?.createdAt || c.createdAt),
-        employee:      c.employee,
-        supervisor:    c.supervisor,
-        location:      c.location,
-        severityLabel: SEVERITY_LEVELS[c.severity]?.label ?? `Level ${c.severity}`,
-        exemptionType:  getExemptionType(c),
-        requesterNotes: getRequesterNote(c),
-        notes:          getExemptionNote(c),
-      }))
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
-    [coachings],
-  )
-
   const exemptionColDefs = useMemo<ColDef[]>(() => [
-    { field: 'date',          headerName: 'Date',           pinned: 'left', sort: 'desc', sortIndex: 0 },
-    { field: 'supervisor',    headerName: 'Supervisor',     pinned: 'left', sort: 'asc',  sortIndex: 1 },
-    { field: 'employee',      headerName: 'Employee' },
-    { field: 'location',      headerName: 'Location' },
-    { field: 'severityLabel', headerName: 'Severity' },
+    { field: 'date',           headerName: 'Date',              pinned: 'left', sort: 'desc', sortIndex: 0 },
+    { field: 'supervisor',     headerName: 'Supervisor',        pinned: 'left', sort: 'asc',  sortIndex: 1 },
+    { field: 'employee',       headerName: 'Employee' },
+    { field: 'location',       headerName: 'Location' },
+    { field: 'severityLabel',  headerName: 'Severity' },
     { field: 'exemptionType',  headerName: 'Exemption Type' },
     { field: 'requesterNotes', headerName: "Requester's Notes", wrapText: true, autoHeight: true, maxWidth: 320, cellStyle: { display: 'flex', alignItems: 'flex-start', whiteSpace: 'normal', lineHeight: '1.4', paddingTop: 8, paddingBottom: 8 } },
     { field: 'notes',          headerName: "Approver's Notes",  wrapText: true, autoHeight: true, maxWidth: 320, cellStyle: { display: 'flex', alignItems: 'flex-start', whiteSpace: 'normal', lineHeight: '1.4', paddingTop: 8, paddingBottom: 8 } },
   ], [])
-
-
-  const exemptionData = useMemo(() => {
-    const map: Record<string, number> = {}
-    for (const c of coachings.filter(isExempted)) {
-      const type = getExemptionType(c)
-      map[type] = (map[type] || 0) + 1
-    }
-    return Object.entries(map)
-      .map(([type, count]) => ({ type, count }))
-      .sort((a, b) => b.count - a.count)
-  }, [coachings])
 
   return (
     <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', background: '#FBFBFC', minHeight: '100vh', padding: '20px 20px' }}>
 
       {/* Stat cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0,1fr))', gap: 10, marginBottom: 16 }}>
-        <StatCard label="Total"     value={totals.total}     sub="All coachings"        accent="#6B7280"             icon={ClipboardDocumentListIcon} />
-        <StatCard label="Delivered" value={totals.completed} pct={totals.completedPct}  sub="Coaching delivered"     accent={STATUS_COLORS.delivered} icon={CheckCircleIcon} />
-        <StatCard label="Improved"  value={totals.improved}  pct={totals.improvedPct}   sub="Performance improved"   accent={STATUS_COLORS.improved}  icon={ArrowTrendingUpIcon} />
-        <StatCard label="Exempted"  value={totals.exempted}  pct={totals.exemptedPct}   sub="Override or exemption"  accent={STATUS_COLORS.exempted}  icon={ShieldExclamationIcon} />
-        <StatCard label="Missed"    value={totals.missed}    pct={totals.missedPct}     sub="No delivery recorded"   accent={STATUS_COLORS.missed}    icon={XCircleIcon} />
-        <StatCard label="Pending"   value={totals.pending}   pct={totals.pendingPct}    sub="Awaiting action"        accent={STATUS_COLORS.pending}   icon={ClockIcon} />
+        <StatCard label="Total"     value={totals.total}     sub="All coachings"       accent="#6B7280"             icon={ClipboardDocumentListIcon} />
+        <StatCard label="Delivered" value={totals.completed} pct={totals.completedPct} sub="Coaching delivered"     accent={STATUS_COLORS.delivered} icon={CheckCircleIcon} />
+        <StatCard label="Improved"  value={totals.improved}  pct={totals.improvedPct}  sub="Performance improved"   accent={STATUS_COLORS.improved}  icon={ArrowTrendingUpIcon} />
+        <StatCard label="Exempted"  value={totals.exempted}  pct={totals.exemptedPct}  sub="Override or exemption"  accent={STATUS_COLORS.exempted}  icon={ShieldExclamationIcon} />
+        <StatCard label="Missed"    value={totals.missed}    pct={totals.missedPct}    sub="No delivery recorded"   accent={STATUS_COLORS.missed}    icon={XCircleIcon} />
+        <StatCard label="Pending"   value={totals.pending}   pct={totals.pendingPct}   sub="Awaiting action"        accent={STATUS_COLORS.pending}   icon={ClockIcon} />
       </div>
 
       {/* Weekly trend */}
@@ -509,8 +374,7 @@ export const CoachingInsights = () => {
             <YAxis yAxisId="pct" width={44} orientation="right" domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fontSize: 11, fill: '#7C3AED' }} axisLine={false} tickLine={false} />
             <Tooltip content={<ChartTooltip />} />
             <Legend content={<ChartLegend />} />
-            {/* Hidden bar for total — used in tooltip only */}
-            <Bar yAxisId="count" dataKey="total"     name="total"     stackId="a" fill="transparent" legendType="none" />
+            <Bar yAxisId="count" dataKey="total" name="total" stackId="a" fill="transparent" legendType="none" />
             {ACTION_STAGES.map((stage, i) => (
               <Bar key={stage.field} yAxisId="count" dataKey={stage.field} name={stage.label} stackId="s" fill={stage.color} opacity={0.9} radius={i === ACTION_STAGES.length - 1 ? [3,3,0,0] : [0,0,0,0]} />
             ))}
@@ -526,7 +390,7 @@ export const CoachingInsights = () => {
         <Card>
           <SectionTitle>Coachings by severity</SectionTitle>
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart layout="vertical" data={severityData} margin={{ top: 0, right: 16, left: 0, bottom: 0 }}>
+            <BarChart layout="vertical" data={severityChartData} margin={{ top: 0, right: 16, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 11, fill: '#9b9a94' }} axisLine={false} tickLine={false} allowDecimals={false} />
               <YAxis type="category" dataKey="name" width={160} tick={<TruncatedTick />} axisLine={false} tickLine={false} />
@@ -539,7 +403,7 @@ export const CoachingInsights = () => {
                 }}
               />
               <Bar dataKey="value" radius={[0, 4, 4, 0]} maxBarSize={28}>
-                {severityData.map((entry, i) => (
+                {severityChartData.map((entry, i) => (
                   <Cell key={i} fill={entry.fill} />
                 ))}
               </Bar>
@@ -621,7 +485,6 @@ export const CoachingInsights = () => {
           />
         </div>
       </Card>
-
 
     </div>
   )
