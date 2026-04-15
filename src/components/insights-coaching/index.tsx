@@ -12,13 +12,15 @@ import { ensureAgGridInitialized } from '../../utils/helpers'
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type ActionConfig    = { value: string; label: string; chartColor: string }
-type SeverityConfig  = { value: number; label: string; color: string }
+type SeverityConfig  = { value: number; label: string; color: string; chartColor: string }
 type ExemptionConfig = { value: string; color: string }
+type OutcomeConfig   = { value: string; label: string; color: string }
 
 type Config = {
   actions: ActionConfig[]
   severities: SeverityConfig[]
   exemptionTypes: ExemptionConfig[]
+  outcomes: OutcomeConfig[]
 }
 
 type WeeklyDataPoint = {
@@ -83,21 +85,13 @@ type InsightsState = {
 // ── Constants (component display only) ───────────────────────────────────────
 
 const EMPTY_STATE: InsightsState = {
-  config: { actions: [], severities: [], exemptionTypes: [] },
+  config: { actions: [], severities: [], exemptionTypes: [], outcomes: [] },
   totals: { total: 0, completed: 0, improved: 0, exempted: 0, missed: 0, pending: 0, completedPct: 0, improvedPct: 0, exemptedPct: 0, missedPct: 0, pendingPct: 0 },
   weeklyData: [],
   severityData: [],
   performanceRows: [],
   exemptionRows: [],
   exemptionData: [],
-}
-
-const STATUS_COLORS = {
-  delivered: '#3B6D11',
-  improved:  '#1D9E75',
-  exempted:  '#854F0B',
-  missed:    '#E24B4A',
-  pending:   '#185FA5',
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -120,17 +114,8 @@ const Card = ({ children, style }: { children: React.ReactNode, style?: React.CS
   </div>
 )
 
-const SectionTitle = ({ children, style }: { children: React.ReactNode, style?: React.CSSProperties }) => (
-  <div style={{ fontSize: 11, fontWeight: 500, color: '#9b9a94', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 14, ...style }}>
-    {children}
-  </div>
-)
-
 const StatCard = ({ label, value, pct, sub, accent, icon: Icon }: { label: string, value: number, pct?: number, sub: string, accent: string, icon: React.ElementType }) => (
-  <div style={{
-    background: '#fff', borderRadius: 10, padding: '16px 18px',
-    boxShadow: '0 1px 1px rgba(0,0,0,0.08), 0 8px 10px rgba(0,0,0,0.08)',
-  }}>
+  <Card style={{ padding: '16px 18px' }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 10 }}>
       <Icon style={{ width: 13, height: 13, color: accent, opacity: 0.7, flexShrink: 0 }} />
       <div style={{ fontSize: 11, fontWeight: 500, color: '#9b9a94', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
@@ -142,14 +127,8 @@ const StatCard = ({ label, value, pct, sub, accent, icon: Icon }: { label: strin
       )}
     </div>
     <div style={{ fontSize: 12, color: '#b8b7b0', marginTop: 7 }}>{sub}</div>
-  </div>
+  </Card>
 )
-
-const TruncatedTick = ({ x, y, payload }: { x?: number, y?: number, payload?: { value: string } }) => {
-  const text = payload?.value ?? ''
-  const truncated = text.length > 22 ? text.slice(0, 21) + '…' : text
-  return <text x={x} y={y} dy={4} textAnchor="end" fontSize={11} fill="#444">{truncated}</text>
-}
 
 const ChartTooltip = ({ active, payload, label }: TooltipProps<ValueType, NameType>) => {
   if (!active || !payload?.length) return null
@@ -183,48 +162,7 @@ const ChartTooltip = ({ active, payload, label }: TooltipProps<ValueType, NameTy
   )
 }
 
-const ChartLegend = ({ payload }: { payload?: { value: string, color: string }[] }) => {
-  if (!payload?.length) return null
-  const items = payload.filter(p => p.value !== 'total' && p.value !== 'Delivery %')
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px 32px', paddingTop: 14, justifyContent: 'center' }}>
-      {items.map(item => (
-        <div key={item.value} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#555', whiteSpace: 'nowrap' }}>
-          <span style={{ width: 8, height: 8, borderRadius: 2, background: item.color, flexShrink: 0, display: 'inline-block' }} />
-          {item.value}
-        </div>
-      ))}
-    </div>
-  )
-}
-
 // ── Column definitions ────────────────────────────────────────────────────────
-
-const performanceColDefs: ColDef[] = [
-  { field: 'location',   rowGroup: true, hide: true },
-  { field: 'supervisor', rowGroup: true, hide: true },
-  { field: 'employee',   headerName: 'Employee' },
-  { field: 'total',      headerName: 'Total',     aggFunc: 'sum' },
-  { field: 'delivered',  headerName: 'Delivered', aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.delivered } },
-  { field: 'improved',   headerName: 'Improved',  aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.improved } },
-  { field: 'exempted',   headerName: 'Exempted',  aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.exempted } },
-  { field: 'missed',     headerName: 'Missed',    aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.missed } },
-  { field: 'pending',    headerName: 'Pending',   aggFunc: 'sum', cellStyle: { color: STATUS_COLORS.pending } },
-  {
-    headerName: 'Delivery %',
-    valueGetter: params => {
-      const delivered = params.node?.group ? (params.node.aggData?.delivered ?? 0) : (params.data?.delivered ?? 0)
-      const total     = params.node?.group ? (params.node.aggData?.total     ?? 0) : (params.data?.total     ?? 1)
-      return total ? Math.round(delivered / total * 100) : 0
-    },
-    valueFormatter: params => `${params.value}%`,
-  },
-  { field: 'timeToViewed',    headerName: 'Time to Viewed',    aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
-  { field: 'timeToReviewed',  headerName: 'Time to Reviewed',  aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
-  { field: 'timeToRequested', headerName: 'Time to Requested', aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
-  { field: 'timeToDelivered', headerName: 'Time to Delivered', aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
-  { field: 'timeToExempted',  headerName: 'Time to Exempted',  aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
-]
 
 const exemptionColDefs: ColDef[] = [
   { field: 'date',           headerName: 'Date',              pinned: 'left', sort: 'desc', sortIndex: 0 },
@@ -261,6 +199,35 @@ const CoachingInsights = () => {
   const perfGridRef = useRef<AgGridReact>(null)
   const onPerfFirstDataRendered = useCallback(() => perfGridRef.current?.api.autoSizeAllColumns(), [])
 
+  const outcomeColor = (value: string) =>
+    config.outcomes.find(o => o.value === value)?.color ?? '#6B7280'
+
+  const performanceColDefs = useMemo<ColDef[]>(() => [
+    { field: 'location',   rowGroup: true, hide: true },
+    { field: 'supervisor', rowGroup: true, hide: true },
+    { field: 'employee',   headerName: 'Employee' },
+    { field: 'total',      headerName: 'Total',     aggFunc: 'sum' },
+    { field: 'delivered',  headerName: 'Delivered', aggFunc: 'sum', cellStyle: { color: outcomeColor('delivered') } },
+    { field: 'improved',   headerName: 'Improved',  aggFunc: 'sum', cellStyle: { color: outcomeColor('improved') } },
+    { field: 'exempted',   headerName: 'Exempted',  aggFunc: 'sum', cellStyle: { color: outcomeColor('exempted') } },
+    { field: 'missed',     headerName: 'Missed',    aggFunc: 'sum', cellStyle: { color: outcomeColor('missed') } },
+    { field: 'pending',    headerName: 'Pending',   aggFunc: 'sum', cellStyle: { color: outcomeColor('pending') } },
+    {
+      headerName: 'Delivery %',
+      valueGetter: params => {
+        const delivered = params.node?.group ? (params.node.aggData?.delivered ?? 0) : (params.data?.delivered ?? 0)
+        const total     = params.node?.group ? (params.node.aggData?.total     ?? 0) : (params.data?.total     ?? 1)
+        return total ? Math.round(delivered / total * 100) : 0
+      },
+      valueFormatter: params => `${params.value}%`,
+    },
+    { field: 'timeToViewed',    headerName: 'Time to Viewed',    aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
+    { field: 'timeToReviewed',  headerName: 'Time to Reviewed',  aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
+    { field: 'timeToRequested', headerName: 'Time to Requested', aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
+    { field: 'timeToDelivered', headerName: 'Time to Delivered', aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
+    { field: 'timeToExempted',  headerName: 'Time to Exempted',  aggFunc: 'avg', valueFormatter: (p: { value: number | null }) => fmtHours(p.value) },
+  ], [config.outcomes])
+
   const severityChartData = useMemo(() =>
     severityData
       .map(({ severity, value }) => {
@@ -268,7 +235,7 @@ const CoachingInsights = () => {
         return {
           name: cfg?.label ?? `Level ${severity}`,
           value,
-          fill: cfg?.color ?? '#94A3B8',
+          fill: cfg?.chartColor ?? '#94A3B8',
         }
       })
       .filter(d => d.value > 0),
@@ -280,17 +247,17 @@ const CoachingInsights = () => {
 
       {/* Stat cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0,1fr))', gap: 10, marginBottom: 16 }}>
-        <StatCard label="Total"     value={totals.total}     sub="All coachings"       accent="#6B7280"             icon={ClipboardDocumentListIcon} />
-        <StatCard label="Delivered" value={totals.completed} pct={totals.completedPct} sub="Coaching delivered"     accent={STATUS_COLORS.delivered} icon={CheckCircleIcon} />
-        <StatCard label="Improved"  value={totals.improved}  pct={totals.improvedPct}  sub="Performance improved"   accent={STATUS_COLORS.improved}  icon={ArrowTrendingUpIcon} />
-        <StatCard label="Exempted"  value={totals.exempted}  pct={totals.exemptedPct}  sub="Override or exemption"  accent={STATUS_COLORS.exempted}  icon={ShieldExclamationIcon} />
-        <StatCard label="Missed"    value={totals.missed}    pct={totals.missedPct}    sub="No delivery recorded"   accent={STATUS_COLORS.missed}    icon={XCircleIcon} />
-        <StatCard label="Pending"   value={totals.pending}   pct={totals.pendingPct}   sub="Awaiting action"        accent={STATUS_COLORS.pending}   icon={ClockIcon} />
+        <StatCard label="Total"     value={totals.total}     sub="All coachings"       accent="#6B7280"                    icon={ClipboardDocumentListIcon} />
+        <StatCard label="Delivered" value={totals.completed} pct={totals.completedPct} sub="Coaching delivered"     accent={outcomeColor('delivered')} icon={CheckCircleIcon} />
+        <StatCard label="Improved"  value={totals.improved}  pct={totals.improvedPct}  sub="Performance improved"   accent={outcomeColor('improved')}  icon={ArrowTrendingUpIcon} />
+        <StatCard label="Exempted"  value={totals.exempted}  pct={totals.exemptedPct}  sub="Override or exemption"  accent={outcomeColor('exempted')}  icon={ShieldExclamationIcon} />
+        <StatCard label="Missed"    value={totals.missed}    pct={totals.missedPct}    sub="No delivery recorded"   accent={outcomeColor('missed')}    icon={XCircleIcon} />
+        <StatCard label="Pending"   value={totals.pending}   pct={totals.pendingPct}   sub="Awaiting action"        accent={outcomeColor('pending')}   icon={ClockIcon} />
       </div>
 
       {/* Weekly trend */}
       <Card>
-        <SectionTitle>Weekly trend</SectionTitle>
+        <div style={{ fontSize: 11, fontWeight: 500, color: '#9b9a94', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 14 }}>Weekly trend</div>
         <ResponsiveContainer width="100%" height={280}>
           <ComposedChart data={weeklyData} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" vertical={false} />
@@ -298,7 +265,7 @@ const CoachingInsights = () => {
             <YAxis yAxisId="count" width={40} tick={{ fontSize: 11, fill: '#9b9a94' }} axisLine={false} tickLine={false} />
             <YAxis yAxisId="pct" width={44} orientation="right" domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fontSize: 11, fill: '#7C3AED' }} axisLine={false} tickLine={false} />
             <Tooltip content={<ChartTooltip />} />
-            <Legend content={<ChartLegend />} />
+            <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
             <Bar yAxisId="count" dataKey="total" name="total" stackId="a" fill="transparent" legendType="none" />
             {config.actions.map((action, i) => {
               const field = action.value.replace(/ /g, '_')
@@ -317,12 +284,12 @@ const CoachingInsights = () => {
 
         {/* Severity bar */}
         <Card>
-          <SectionTitle>Coachings by severity</SectionTitle>
+          <div style={{ fontSize: 11, fontWeight: 500, color: '#9b9a94', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 14 }}>Coachings by severity</div>
           <ResponsiveContainer width="100%" height={280}>
             <BarChart layout="vertical" data={severityChartData} margin={{ top: 0, right: 16, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 11, fill: '#9b9a94' }} axisLine={false} tickLine={false} allowDecimals={false} />
-              <YAxis type="category" dataKey="name" width={160} tick={<TruncatedTick />} axisLine={false} tickLine={false} />
+              <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 11, fill: '#9b9a94' }} axisLine={false} tickLine={false} />
               <Tooltip
                 formatter={(value: number) => [value, 'Count']}
                 contentStyle={{
@@ -342,7 +309,7 @@ const CoachingInsights = () => {
 
         {/* Exemptions by type pie */}
         <Card>
-          <SectionTitle>Exemptions by type</SectionTitle>
+          <div style={{ fontSize: 11, fontWeight: 500, color: '#9b9a94', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 14 }}>Exemptions by type</div>
           {exemptionData.length === 0
             ? <div style={{ fontSize: 13, color: '#b8b7b0', paddingTop: 8 }}>No exemptions in data</div>
             : (
@@ -370,7 +337,7 @@ const CoachingInsights = () => {
                       boxShadow: '0 1px 1px rgba(0,0,0,0.08), 0 8px 10px rgba(0,0,0,0.08)',
                     }}
                   />
-                  <Legend content={<ChartLegend />} />
+                  <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
                 </PieChart>
               </ResponsiveContainer>
             )
@@ -381,7 +348,7 @@ const CoachingInsights = () => {
 
       {/* Performance by location & supervisor */}
       <Card style={{ marginTop: 16 }}>
-        <SectionTitle>Performance by location & supervisor</SectionTitle>
+        <div style={{ fontSize: 11, fontWeight: 500, color: '#9b9a94', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 14 }}>Performance by location & supervisor</div>
         <div style={{ height: 400 }}>
           <AgGridReact
             ref={perfGridRef}
@@ -400,7 +367,7 @@ const CoachingInsights = () => {
 
       {/* Exemption log */}
       <Card style={{ marginTop: 16 }}>
-        <SectionTitle>Exemption log</SectionTitle>
+        <div style={{ fontSize: 11, fontWeight: 500, color: '#9b9a94', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 14 }}>Exemption log</div>
         <div style={{ height: 400 }}>
           <AgGridReact
             ref={gridRef}
