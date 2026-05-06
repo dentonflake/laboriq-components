@@ -11,7 +11,7 @@ import { ensureAgGridInitialized } from '../../utils/helpers'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type ActionConfig    = { value: string; label: string; chartColor: string }
+type ActionConfig    = { value: string; label: string; chartColor: string; outcome: string }
 type SeverityConfig  = { value: number; label: string; color: string; chartColor: string }
 type ExemptionConfig = { value: string; color: string }
 type OutcomeConfig   = { value: string; label: string; color: string }
@@ -72,6 +72,17 @@ type ExemptionRow = {
   notes: string
 }
 
+type OverrideRow = {
+  date: string
+  employee: string
+  supervisor: string
+  location: string
+  originalSeverity: string
+  newSeverity: string
+  requesterNotes: string
+  notes: string
+}
+
 type InsightsState = {
   config: Config
   totals: Totals
@@ -80,6 +91,7 @@ type InsightsState = {
   performanceRows: PerformanceRow[]
   exemptionRows: ExemptionRow[]
   exemptionData: { type: string; count: number }[]
+  overrideRows: OverrideRow[]
 }
 
 // ── Constants (component display only) ───────────────────────────────────────
@@ -92,6 +104,7 @@ const EMPTY_STATE: InsightsState = {
   performanceRows: [],
   exemptionRows: [],
   exemptionData: [],
+  overrideRows: [],
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -114,21 +127,38 @@ const Card = ({ children, style }: { children: React.ReactNode, style?: React.CS
   </div>
 )
 
-const StatCard = ({ label, value, pct, sub, accent, icon: Icon }: { label: string, value: number, pct?: number, sub: string, accent: string, icon: React.ElementType }) => (
-  <Card style={{ padding: '16px 18px' }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 10 }}>
-      <Icon style={{ width: 13, height: 13, color: accent, opacity: 0.7, flexShrink: 0 }} />
-      <div style={{ fontSize: 11, fontWeight: 500, color: '#9b9a94', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
-    </div>
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
-      <div style={{ fontSize: 32, fontWeight: 600, color: accent, lineHeight: 1 }}>{value}</div>
-      {pct !== undefined && (
-        <div style={{ fontSize: 13, fontWeight: 500, color: accent, opacity: 0.6 }}>{pct}%</div>
+const StatCard = ({ label, value, pct, accent, icon: Icon, tooltip }: { label: string, value: number, pct?: number, accent: string, icon: React.ElementType, tooltip?: string[] }) => {
+  const [hovered, setHovered] = React.useState(false)
+  return (
+    <div style={{ position: 'relative' }} onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+    <Card style={{ padding: '16px 18px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 10 }}>
+        <Icon style={{ width: 13, height: 13, color: accent, opacity: 0.7, flexShrink: 0 }} />
+        <div style={{ fontSize: 11, fontWeight: 500, color: '#9b9a94', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
+        <div style={{ fontSize: 32, fontWeight: 600, color: accent, lineHeight: 1 }}>{value}</div>
+        {pct !== undefined && (
+          <div style={{ fontSize: 13, fontWeight: 500, color: accent, opacity: 0.6 }}>{pct}%</div>
+        )}
+      </div>
+      {hovered && tooltip?.length && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 6px)', left: 0,
+          background: '#fff', color: '#444', borderRadius: 8, padding: '10px 14px',
+          fontSize: 11, lineHeight: 1.6, zIndex: 10, whiteSpace: 'nowrap',
+          border: '0.5px solid rgba(0,0,0,0.1)',
+          boxShadow: '0 1px 1px rgba(0,0,0,0.08), 0 8px 10px rgba(0,0,0,0.08)',
+        }}>
+          <div style={{ fontWeight: 600, color: '#1a1a1a', marginBottom: 4 }}>Pipeline stages</div>
+          <div style={{ color: '#9b9a94', marginBottom: 6, fontSize: 10 }}>Coachings whose last action is one of:</div>
+          {tooltip.map(t => <div key={t}>{t}</div>)}
+        </div>
       )}
+    </Card>
     </div>
-    <div style={{ fontSize: 12, color: '#b8b7b0', marginTop: 7 }}>{sub}</div>
-  </Card>
-)
+  )
+}
 
 const ChartTooltip = ({ active, payload, label }: TooltipProps<ValueType, NameType>) => {
   if (!active || !payload?.length) return null
@@ -154,7 +184,7 @@ const ChartTooltip = ({ active, payload, label }: TooltipProps<ValueType, NameTy
         <span style={{ fontWeight: 500 }}>Total</span>
         <span style={{ fontWeight: 600 }}>{total}</span>
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', color: '#7C3AED', marginTop: 6 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', color: '#16A34A', marginTop: 6 }}>
         <span>Delivery %</span>
         <span style={{ fontWeight: 500 }}>{payload.find(p => p.name === 'Delivery %')?.value}%</span>
       </div>
@@ -175,6 +205,17 @@ const exemptionColDefs: ColDef[] = [
   { field: 'notes',          headerName: "Approver's Notes",  wrapText: true, autoHeight: true, maxWidth: 320, cellStyle: { display: 'flex', alignItems: 'flex-start', whiteSpace: 'normal', lineHeight: '1.4', paddingTop: 8, paddingBottom: 8 } },
 ]
 
+const overrideColDefs: ColDef[] = [
+  { field: 'date',             headerName: 'Date',               pinned: 'left', sort: 'desc', sortIndex: 0 },
+  { field: 'supervisor',       headerName: 'Supervisor',         pinned: 'left', sort: 'asc',  sortIndex: 1 },
+  { field: 'employee',         headerName: 'Employee' },
+  { field: 'location',         headerName: 'Location' },
+  { field: 'originalSeverity', headerName: 'Original Severity' },
+  { field: 'newSeverity',      headerName: 'New Severity' },
+  { field: 'requesterNotes',   headerName: "Requester's Notes", wrapText: true, autoHeight: true, maxWidth: 320, cellStyle: { display: 'flex', alignItems: 'flex-start', whiteSpace: 'normal', lineHeight: '1.4', paddingTop: 8, paddingBottom: 8 } },
+  { field: 'notes',            headerName: "Approver's Notes",  wrapText: true, autoHeight: true, maxWidth: 320, cellStyle: { display: 'flex', alignItems: 'flex-start', whiteSpace: 'normal', lineHeight: '1.4', paddingTop: 8, paddingBottom: 8 } },
+]
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 const CoachingInsights = () => {
@@ -191,16 +232,23 @@ const CoachingInsights = () => {
     performanceRows = [],
     exemptionRows   = [],
     exemptionData   = [],
+    overrideRows    = [],
   } = (state as InsightsState) ?? EMPTY_STATE
 
   const gridRef = useRef<AgGridReact>(null)
   const onFirstDataRendered = useCallback(() => gridRef.current?.api.autoSizeAllColumns(), [])
+
+  const overrideGridRef = useRef<AgGridReact>(null)
+  const onOverrideFirstDataRendered = useCallback(() => overrideGridRef.current?.api.autoSizeAllColumns(), [])
 
   const perfGridRef = useRef<AgGridReact>(null)
   const onPerfFirstDataRendered = useCallback(() => perfGridRef.current?.api.autoSizeAllColumns(), [])
 
   const outcomeColor = (value: string) =>
     config.outcomes.find(o => o.value === value)?.color ?? '#6B7280'
+
+  const actionsByOutcome = (outcome: string) =>
+    config.actions.filter(a => a.outcome === outcome).map(a => a.label)
 
   const performanceColDefs = useMemo<ColDef[]>(() => [
     { field: 'location',   rowGroup: true, hide: true },
@@ -247,12 +295,12 @@ const CoachingInsights = () => {
 
       {/* Stat cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0,1fr))', gap: 10, marginBottom: 16 }}>
-        <StatCard label="Total"     value={totals.total}     sub="All coachings"       accent="#6B7280"                    icon={ClipboardDocumentListIcon} />
-        <StatCard label="Delivered" value={totals.completed} pct={totals.completedPct} sub="Coaching delivered"     accent={outcomeColor('delivered')} icon={CheckCircleIcon} />
-        <StatCard label="Improved"  value={totals.improved}  pct={totals.improvedPct}  sub="Performance improved"   accent={outcomeColor('improved')}  icon={ArrowTrendingUpIcon} />
-        <StatCard label="Exempted"  value={totals.exempted}  pct={totals.exemptedPct}  sub="Override or exemption"  accent={outcomeColor('exempted')}  icon={ShieldExclamationIcon} />
-        <StatCard label="Missed"    value={totals.missed}    pct={totals.missedPct}    sub="No delivery recorded"   accent={outcomeColor('missed')}    icon={XCircleIcon} />
-        <StatCard label="Pending"   value={totals.pending}   pct={totals.pendingPct}   sub="Awaiting action"        accent={outcomeColor('pending')}   icon={ClockIcon} />
+        <StatCard label="Total"     value={totals.total}                               accent="#6B7280"                    icon={ClipboardDocumentListIcon} tooltip={config.actions.map(a => a.label)} />
+        <StatCard label="Delivered" value={totals.completed} pct={totals.completedPct} accent={outcomeColor('delivered')} icon={CheckCircleIcon}           tooltip={actionsByOutcome('delivered')} />
+        <StatCard label="Improved"  value={totals.improved}  pct={totals.improvedPct}  accent={outcomeColor('improved')}  icon={ArrowTrendingUpIcon}        tooltip={actionsByOutcome('improved')} />
+        <StatCard label="Exempted"  value={totals.exempted}  pct={totals.exemptedPct}  accent={outcomeColor('exempted')}  icon={ShieldExclamationIcon}      tooltip={actionsByOutcome('exempted')} />
+        <StatCard label="Missed"    value={totals.missed}    pct={totals.missedPct}    accent={outcomeColor('missed')}    icon={XCircleIcon}                tooltip={actionsByOutcome('missed')} />
+        <StatCard label="Pending"   value={totals.pending}   pct={totals.pendingPct}   accent={outcomeColor('pending')}   icon={ClockIcon}                  tooltip={actionsByOutcome('pending')} />
       </div>
 
       {/* Weekly trend */}
@@ -263,7 +311,7 @@ const CoachingInsights = () => {
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" vertical={false} />
             <XAxis dataKey="week" tick={{ fontSize: 11, fill: '#9b9a94' }} axisLine={false} tickLine={false} />
             <YAxis yAxisId="count" width={40} tick={{ fontSize: 11, fill: '#9b9a94' }} axisLine={false} tickLine={false} />
-            <YAxis yAxisId="pct" width={44} orientation="right" domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fontSize: 11, fill: '#7C3AED' }} axisLine={false} tickLine={false} />
+            <YAxis yAxisId="pct" width={44} orientation="right" domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fontSize: 11, fill: '#16A34A' }} axisLine={false} tickLine={false} />
             <Tooltip content={<ChartTooltip />} />
             <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
             <Bar yAxisId="count" dataKey="total" name="total" stackId="a" fill="transparent" legendType="none" />
@@ -274,7 +322,7 @@ const CoachingInsights = () => {
                 <Bar key={field} yAxisId="count" dataKey={field} name={action.label} stackId="s" fill={action.chartColor} opacity={0.9} radius={isLast ? [3, 3, 0, 0] : [0, 0, 0, 0]} />
               )
             })}
-            <Line yAxisId="pct" type="monotone" dataKey="completionPct" name="Delivery %" stroke="#7C3AED" strokeWidth={2} dot={{ r: 3, fill: '#7C3AED' }} legendType="none" />
+            <Line yAxisId="pct" type="monotone" dataKey="completionPct" name="Delivery %" stroke="#16A34A" strokeWidth={2} dot={{ r: 3, fill: '#16A34A' }} legendType="none" />
           </ComposedChart>
         </ResponsiveContainer>
       </Card>
@@ -377,6 +425,22 @@ const CoachingInsights = () => {
             defaultColDef={{ resizable: true, filter: true, sortable: true, cellStyle: { display: 'flex', alignItems: 'center' } }}
             cellSelection
             onFirstDataRendered={onFirstDataRendered}
+          />
+        </div>
+      </Card>
+
+      {/* Override log */}
+      <Card style={{ marginTop: 16 }}>
+        <div style={{ fontSize: 11, fontWeight: 500, color: '#9b9a94', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 14 }}>Override log</div>
+        <div style={{ height: 400 }}>
+          <AgGridReact
+            ref={overrideGridRef}
+            rowData={overrideRows}
+            columnDefs={overrideColDefs}
+            theme={themeQuartz}
+            defaultColDef={{ resizable: true, filter: true, sortable: true, cellStyle: { display: 'flex', alignItems: 'center' } }}
+            cellSelection
+            onFirstDataRendered={onOverrideFirstDataRendered}
           />
         </div>
       </Card>
