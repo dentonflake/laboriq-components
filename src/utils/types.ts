@@ -107,3 +107,52 @@ export type LocationInsightsGridProps = {
   agGridLicenseKey?: string
   setState?: (updates: Retool.SerializableObject) => void
 }
+
+// Tall row shape the grid builds internally from `plans` + `programs`.
+// AG Grid's pivot mode widens this into the visible spreadsheet layout.
+export type InboundPlanRow = {
+  programId: number
+  program: string
+  weekStart: string                   // 'YYYY-MM-DD'
+  loadType: 'baseline' | 'backlog'
+  loadCount: number
+}
+
+// Wide row shape the InboundPlan grid builds for column-group rendering —
+// one row per program with dynamic cell fields keyed by week (e.g.
+// 'wk-2026-05-18_baseline' / 'wk-2026-05-18_backlog'). The non-cell fields
+// (program, source, programProfile) are constant per program and render in
+// the pinned-left columns.
+export type WideRow = {
+  programId: number
+  program: string
+  source: string
+  programProfile: string
+  [cellField: string]: number | string
+}
+
+// Unified row shape the InboundPlan grid takes — one row per (week × program)
+// for programs assigned to the current building. Cells with no plan data come
+// through with loadType = null and loadCount = null. Built by the Retool
+// transformer from the main SQL query + the BQ programs name lookup.
+export type RawInboundRow = {
+  weekStart: string | Date
+  programId: number
+  program: string
+  source: string | null              // 'budget' | 'revision' (from locationToPrograms)
+  programProfile: string | null      // e.g. 'RC Sortable', 'FC Non-Sort'
+  loadType: 'baseline' | 'backlog' | null
+  loadCount: number | null
+}
+
+export type EditedCell = {
+  programId: number
+  weekStart: string
+  loadType: 'baseline' | 'backlog'
+  loadCount: number
+}
+
+export type InboundPlanGridProps = {
+  rows: RawInboundRow[]
+  agGridLicenseKey?: string
+}

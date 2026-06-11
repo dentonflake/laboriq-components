@@ -1,6 +1,12 @@
 
 import { IAggFuncParams, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'
-import { LicenseManager, AllEnterpriseModule, IntegratedChartsModule } from 'ag-grid-enterprise'
+import {
+  LicenseManager,
+  AllEnterpriseModule,
+  IntegratedChartsModule,
+  PivotModule,
+  RowGroupingModule
+} from 'ag-grid-enterprise'
 import { AgChartsEnterpriseModule } from 'ag-charts-enterprise'
 
 export const parseHour = (value: string) => {
@@ -210,7 +216,39 @@ const applyAgGridLicense = (rawLicenseKey?: string) => {
 export const ensureAgGridInitialized = (rawLicenseKey?: string) => {
   applyAgGridLicense(rawLicenseKey)
   if (!hasRegisteredAgGridModules) {
-    ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule, IntegratedChartsModule.with(AgChartsEnterpriseModule)])
+    ModuleRegistry.registerModules([
+      AllCommunityModule,
+      AllEnterpriseModule,
+      IntegratedChartsModule.with(AgChartsEnterpriseModule),
+      // Explicit pivot / row-grouping modules — belt-and-suspenders against
+      // bundler tree-shaking dropping them from the AllEnterpriseModule barrel.
+      RowGroupingModule,
+      PivotModule
+    ])
     hasRegisteredAgGridModules = true
   }
+}
+
+// ── Inbound Plan helpers ──────────────────────────────────────────────────────
+
+export const LOAD_TYPES = ['baseline', 'backlog'] as const
+
+// Cell field naming: 'wk-YYYY-MM-DD_{suffix}'. Used both for editable baseline/
+// backlog cells AND for read-only computed/imported cells (e.g. 'actual').
+// parseCellField only matches the editable suffixes ('baseline' | 'backlog')
+// since those are the only ones the edit handler cares about.
+export const cellFieldFor = (weekStart: string, suffix: string) =>
+  `wk-${weekStart}_${suffix}`
+
+export const parseCellField = (field: string) => {
+  const match = /^wk-(\d{4}-\d{2}-\d{2})_(baseline|backlog)$/.exec(field)
+  if (!match) return null
+  return { weekStart: match[1], loadType: match[2] as 'baseline' | 'backlog' }
+}
+
+// Format a 'YYYY-MM-DD' weekStart into a short column-group header ('May 18').
+export const formatWeekHeader = (mondayIso: string) => {
+  if (!mondayIso) return ''
+  const d = new Date(`${mondayIso}T00:00:00Z`)
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
