@@ -80,3 +80,8 @@
   font-weight: 700;
 }
 
+.currentWeekHeader {
+  background-color: var(--color-primary-050);
+  color: var(--color-primary-900);
+}
+

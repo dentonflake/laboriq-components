@@ -1,0 +1,175 @@
+// Pure pivot + week math for the Inbound Planning Model grid. Deliberately
+// free of AG Grid / Retool imports so it stays unit-testable in isolation
+// (utils/helpers.ts pulls in AG Grid modules at the top, which is why these
+// helpers live here instead).
+
+import {
+  PlanningCellMeta,
+  PlanningModelPivotResult,
+  PlanningModelWideRow,
+  PlanningWeek,
+  RawPlanningModelRow
+} from '../../utils/types'
+
+export const PLAN_FIELDS = ['baseline', 'backlog'] as const
+
+const MS_PER_DAY = 86_400_000
+
+export const toNumber = (value: unknown) => Number(value) || 0
+
+// Normalize an ISO weekStart ('2026-06-01T00:00:00.000Z') to its date part.
+export const weekKeyOf = (weekStart: string) => String(weekStart).slice(0, 10)
+
+// Cell field naming: 'wk-YYYY-MM-DD_{suffix}' — same scheme as inbound-plan.
+export const cellFieldFor = (weekKey: string, suffix: string) =>
+  `wk-${weekKey}_${suffix}`
+
+// Only matches the editable suffixes — the edit handler ignores everything else.
+export const parseCellField = (field: string) => {
+  const match = /^wk-(\d{4}-\d{2}-\d{2})_(baseline|backlog)$/.exec(field)
+  if (!match) return null
+  return { weekKey: match[1], field: match[2] as 'baseline' | 'backlog' }
+}
+
+export const cellMetaKeyFor = (programId: number, weekKey: string) =>
+  `${programId}|${weekKey}`
+
+const utcEpochOf = (weekKey: string) => Date.parse(`${weekKey}T00:00:00Z`)
+
+const addDays = (weekKey: string, days: number) =>
+  new Date(utcEpochOf(weekKey) + days * MS_PER_DAY).toISOString().slice(0, 10)
+
+// ISO 8601 week number — weeks start Monday, week 1 contains the first
+// Thursday of the year (handles year-boundary weeks correctly).
+export const isoWeekNumber = (weekKey: string) => {
+  const date = new Date(utcEpochOf(weekKey))
+  const dayOfWeek = date.getUTCDay() || 7
+  date.setUTCDate(date.getUTCDate() + 4 - dayOfWeek)
+  const yearStart = Date.UTC(date.getUTCFullYear(), 0, 1)
+  return Math.ceil(((date.getTime() - yearStart) / MS_PER_DAY + 1) / 7)
+}
+
+export const formatWeekGroupHeader = (weekKey: string) => {
+  const [year, month, day] = weekKey.split('-').map(Number)
+  return `Wk ${isoWeekNumber(weekKey)} · ${month}/${day}/${year}`
+}
+
+// ISO date keys compare correctly as strings, so week membership is plain
+// string comparison against the week's start and end dates.
+export const isPastWeek = (weekKey: string, todayKey: string) =>
+  addDays(weekKey, 6) < todayKey
+
+export const isCurrentWeek = (weekKey: string, todayKey: string) =>
+  weekKey <= todayKey && todayKey <= addDays(weekKey, 6)
+
+// Pivot long-format program-week rows to wide: one row per program, with
+// 'wk-*' cell fields for every distinct week in the data. Weeks are derived
+// from the data, never hardcoded. Cells the data doesn't mention default to 0.
+export const pivotPlanningRows = (
+  rows: RawPlanningModelRow[]
+): PlanningModelPivotResult => {
+
+  type ProgramFields = Pick<
+    PlanningModelWideRow,
+    'programId' | 'locationId' | 'program' | 'type' | 'programProfile'
+  >
+
+  const weekKeySet = new Set<string>()
+  const programById = new Map<number, ProgramFields>()
+  const cellMeta = new Map<string, PlanningCellMeta>()
+  const valuesByCell = new Map<
+    string,
+    { baseline: number, backlog: number, actuals: number | null }
+  >()
+  let hasActuals = false
+
+  for (const row of rows) {
+    const programId = row.program?.id
+    if (programId == null || !row.weekStart) continue
+
+    const weekKey = weekKeyOf(row.weekStart)
+    weekKeySet.add(weekKey)
+
+    // `type` is stable per program within the window, so first row wins.
+    if (!programById.has(programId)) {
+      programById.set(programId, {
+        programId,
+        locationId: row.location?.id ?? 0,
+        program: row.program?.name ?? `Program ${programId}`,
+        type: row.type ?? '',
+        programProfile: row.program?.programProfile ?? ''
+      })
+    }
+
+    const actuals = row.actuals ?? null
+    if (actuals != null) hasActuals = true
+
+    const metaKey = cellMetaKeyFor(programId, weekKey)
+    cellMeta.set(metaKey, {
+      rowKey: row.id,
+      weekStart: String(row.weekStart),
+      budgetBaseline: row.budgetBaseline ?? null
+    })
+    valuesByCell.set(metaKey, {
+      baseline: row.baseline ?? row.budgetBaseline ?? 0,
+      backlog: row.backlog ?? 0,
+      actuals
+    })
+  }
+
+  const weeks: PlanningWeek[] = [...weekKeySet].sort().map(key => ({
+    key,
+    header: formatWeekGroupHeader(key)
+  }))
+
+  const rowData = [...programById.values()]
+    .sort((a, b) => a.program.localeCompare(b.program))
+    .map(programFields => {
+      const wide: PlanningModelWideRow = { ...programFields }
+      for (const week of weeks) {
+        const values = valuesByCell.get(
+          cellMetaKeyFor(programFields.programId, week.key)
+        )
+        wide[cellFieldFor(week.key, 'baseline')] = values?.baseline ?? 0
+        wide[cellFieldFor(week.key, 'backlog')] = values?.backlog ?? 0
+        if (hasActuals) {
+          wide[cellFieldFor(week.key, 'actuals')] = values?.actuals ?? 0
+        }
+      }
+      return wide
+    })
+
+  return { rowData, weeks, cellMeta, hasActuals }
+}
+
+// Pinned-bottom totals row — sums every numeric week cell across programs.
+// Total Plan / Variance columns are valueGetters, so they compute themselves
+// for this row from the summed fields.
+export const buildTotalsRow = (
+  rowData: PlanningModelWideRow[],
+  weeks: PlanningWeek[],
+  hasActuals: boolean
+): PlanningModelWideRow => {
+
+  const totals: PlanningModelWideRow = {
+    programId: 0,
+    locationId: 0,
+    program: 'Total',
+    type: '',
+    programProfile: ''
+  }
+
+  const suffixes = hasActuals ? [...PLAN_FIELDS, 'actuals'] : [...PLAN_FIELDS]
+
+  for (const week of weeks) {
+    for (const suffix of suffixes) {
+      const cellField = cellFieldFor(week.key, suffix)
+      totals[cellField] = rowData.reduce(
+        (sum, row) => sum + toNumber(row[cellField]),
+        0
+      )
+    }
+  }
+
+  return totals
+}

@@ -156,3 +156,116 @@ export type InboundPlanGridProps = {
   rows: RawInboundRow[]
   agGridLicenseKey?: string
 }
+
+// ── Inbound Planning Model ────────────────────────────────────────────────────
+
+// Long-format row from the Retool transformer — one per (location × program ×
+// week). `type`, `budgetBaseline`, `baselineOverride` and `actuals` are
+// planned additions to the transformer; the component degrades gracefully
+// while they're absent.
+export type RawPlanningModelRow = {
+  id: string                          // `${locationId}-${programId}-${weekStart}`
+  weekStart: string                   // ISO, e.g. '2026-06-01T00:00:00.000Z'
+  baseline: number | null             // COALESCE(baselineOverride, budgetBaseline)
+  backlog: number | null
+  totalPlan: number | null
+  type?: 'Budget' | 'Revision' | null
+  budgetBaseline?: number | null
+  baselineOverride?: number | null
+  actuals?: number | null
+  location: { id: number, name: string } | null
+  program: { id: number, name: string, programProfile: string | null } | null
+}
+
+export type PlanningWeek = {
+  key: string                         // normalized 'YYYY-MM-DD' week start
+  header: string                      // 'Wk 24 · 6/8/2026'
+}
+
+// Per (program × week) facts the wide row doesn't carry — original row key,
+// original weekStart string, and the budget baseline used for override
+// styling / clear-to-revert. Keyed by `${programId}|${weekKey}`.
+export type PlanningCellMeta = {
+  rowKey: string
+  weekStart: string
+  budgetBaseline: number | null
+}
+
+// Wide row shape for column-group rendering — one row per program with
+// dynamic cell fields keyed by week (e.g. 'wk-2026-06-01_baseline').
+export type PlanningModelWideRow = {
+  programId: number
+  locationId: number
+  program: string
+  type: string
+  programProfile: string
+  [cellField: string]: number | string
+}
+
+export type PlanningModelPivotResult = {
+  rowData: PlanningModelWideRow[]
+  weeks: PlanningWeek[]
+  cellMeta: Map<string, PlanningCellMeta>
+  hasActuals: boolean
+}
+
+// Payload exposed as `lastEditedCell` state when `cellValueChanged` fires.
+export type PlanningModelEditedCell = {
+  rowKey: string
+  locationId: number
+  programId: number
+  weekStart: string
+  field: 'baseline' | 'backlog'
+  previousValue: number
+  newValue: number
+}
+
+export type InboundPlanningModelGridProps = {
+  rows: RawPlanningModelRow[]
+  agGridLicenseKey?: string
+}
+
+// ── Weekly Load Distribution ──────────────────────────────────────────────────
+
+export type LoadDistributionMetric = 'loads' | 'units' | 'revenue'
+
+// Long-format row from the Retool transformer — one per (program × location),
+// all for the same week. `units` and `revenue` are planned additions; the
+// component degrades gracefully while they're absent.
+export type RawLoadDistributionRow = {
+  totalPlan: number | null              // planned loads = baseline + backlog
+  units?: number | null
+  revenue?: number | null
+  location: { id: number, name: string, sortOrder?: number | null } | null
+  program: { id: number, name: string, programProfile: string | null } | null
+}
+
+export type LoadDistributionLocation = {
+  id: number
+  name: string
+  sortOrder: number | null
+}
+
+// Wide row shape — one row per program with dynamic 'loc-{id}' cell fields.
+// A null cell means the program has no plan at that location (rendered blank,
+// counted as 0 in totals).
+export type LoadDistributionWideRow = {
+  programId: number
+  program: string
+  programProfile: string
+  grandTotal: number
+  [cellField: string]: number | string | null
+}
+
+export type LoadDistributionPivotResult = {
+  rowData: LoadDistributionWideRow[]
+  locations: LoadDistributionLocation[]
+  totalsRow: LoadDistributionWideRow | null
+  hasProfiles: boolean
+}
+
+export type WeeklyLoadDistributionGridProps = {
+  rows: RawLoadDistributionRow[]
+  metric?: string
+  agGridLicenseKey?: string
+}
