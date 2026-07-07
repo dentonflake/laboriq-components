@@ -309,7 +309,7 @@ const AreaGroup: FC<{ area: Area; selKey: string | null; showDots: boolean; onSe
 /* =========================================================================
    Main component.
    ========================================================================= */
-export const FloorStaffing: FC = () => {
+export const FloorStaffing = () => {
   // --- Retool-bound props (appear in the right-hand inspector) ---
   const [rows] = Retool.useStateArray({ name: 'rows', label: 'Floor records (query output)' })
   const [showGlanceDots] = Retool.useStateBoolean({ name: 'showGlanceDots', initialValue: true, label: 'Show glance dots' })
