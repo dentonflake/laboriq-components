@@ -191,6 +191,7 @@ export type WeeklyPlanCellMeta = {
 export type WeeklyPlanWideRow = {
   programId: number
   locationId: number
+  location: string
   program: string
   programProfile: string
   [cellField: string]: number | string

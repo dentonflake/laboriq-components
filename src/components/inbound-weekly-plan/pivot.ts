@@ -31,8 +31,12 @@ export const parseCellField = (field: string) => {
   return { weekKey: match[1], field: match[2] as 'baseline' | 'backlog' }
 }
 
-export const cellMetaKeyFor = (programId: number, weekKey: string) =>
-  `${programId}|${weekKey}`
+export const cellMetaKeyFor = (locationId: number, programId: number, weekKey: string) =>
+  `${locationId}|${programId}|${weekKey}`
+
+// Row identity — one grid row per (location × program).
+export const rowKeyFor = (locationId: number, programId: number) =>
+  `${locationId}|${programId}`
 
 const utcEpochOf = (weekKey: string) => Date.parse(`${weekKey}T00:00:00Z`)
 
@@ -71,11 +75,11 @@ export const pivotWeeklyPlanRows = (
 
   type ProgramFields = Pick<
     WeeklyPlanWideRow,
-    'programId' | 'locationId' | 'program' | 'programProfile'
+    'programId' | 'locationId' | 'location' | 'program' | 'programProfile'
   >
 
   const weekKeySet = new Set<string>()
-  const programById = new Map<number, ProgramFields>()
+  const programByKey = new Map<string, ProgramFields>()
   const cellMeta = new Map<string, WeeklyPlanCellMeta>()
   const valuesByCell = new Map<
     string,
@@ -86,19 +90,22 @@ export const pivotWeeklyPlanRows = (
     const programId = row.program?.id
     if (programId == null || !row.effectiveDate) continue
 
+    const locationId = row.location?.id ?? 0
     const weekKey = weekKeyOf(row.effectiveDate)
     weekKeySet.add(weekKey)
 
-    if (!programById.has(programId)) {
-      programById.set(programId, {
+    const rowKey = rowKeyFor(locationId, programId)
+    if (!programByKey.has(rowKey)) {
+      programByKey.set(rowKey, {
         programId,
-        locationId: row.location?.id ?? 0,
+        locationId,
+        location: row.location?.name ?? `Location ${locationId}`,
         program: row.program?.name ?? `Program ${programId}`,
         programProfile: row.program?.programProfile ?? ''
       })
     }
 
-    const metaKey = cellMetaKeyFor(programId, weekKey)
+    const metaKey = cellMetaKeyFor(locationId, programId, weekKey)
     cellMeta.set(metaKey, {
       rowKey: row.id,
       effectiveDate: String(row.effectiveDate),
@@ -115,13 +122,15 @@ export const pivotWeeklyPlanRows = (
     header: formatWeekGroupHeader(key)
   }))
 
-  const rowData = [...programById.values()]
-    .sort((a, b) => a.program.localeCompare(b.program))
+  const rowData = [...programByKey.values()]
+    .sort((a, b) =>
+      a.location.localeCompare(b.location) || a.program.localeCompare(b.program)
+    )
     .map(programFields => {
       const wide: WeeklyPlanWideRow = { ...programFields }
       for (const week of weeks) {
         const values = valuesByCell.get(
-          cellMetaKeyFor(programFields.programId, week.key)
+          cellMetaKeyFor(programFields.locationId, programFields.programId, week.key)
         )
         wide[cellFieldFor(week.key, 'baseline')] = values?.baseline ?? 0
         wide[cellFieldFor(week.key, 'backlog')] = values?.backlog ?? 0
@@ -143,6 +152,7 @@ export const buildTotalsRow = (
   const totals: WeeklyPlanWideRow = {
     programId: 0,
     locationId: 0,
+    location: '',
     program: 'Total',
     programProfile: ''
   }

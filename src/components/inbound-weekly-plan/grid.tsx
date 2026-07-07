@@ -87,6 +87,16 @@ const InboundWeeklyPlanGrid = ({
 
   const colDefs = useMemo<(ColDef<WeeklyPlanWideRow> | ColGroupDef<WeeklyPlanWideRow>)[]>(() => {
 
+    const locationCol: ColDef<WeeklyPlanWideRow> = {
+      field: 'location',
+      headerName: 'Location',
+      pinned: 'left',
+      flex: 0,
+      width: 160,
+      tooltipField: 'location',
+      cellStyle: { fontWeight: 600 }
+    }
+
     const programCol: ColDef<WeeklyPlanWideRow> = {
       field: 'program',
       headerName: 'Program',
@@ -119,7 +129,7 @@ const InboundWeeklyPlanGrid = ({
         weekEditable && !params.node.rowPinned
 
       const metaFor = (data: WeeklyPlanWideRow | undefined) =>
-        data ? cellMeta.get(cellMetaKeyFor(data.programId, week.key)) : undefined
+        data ? cellMeta.get(cellMetaKeyFor(data.locationId, data.programId, week.key)) : undefined
 
       const totalPlanGetter = (params: ValueGetterParams<WeeklyPlanWideRow>) =>
         toNumber(params.data?.[baselineField]) + toNumber(params.data?.[backlogField])
@@ -225,6 +235,7 @@ const InboundWeeklyPlanGrid = ({
     }
 
     return [
+      locationCol,
       programCol,
       profileCol,
       ...weeks.map(buildWeekGroup)
@@ -252,7 +263,8 @@ const InboundWeeklyPlanGrid = ({
   }), [])
 
   const getRowId = useCallback(
-    (params: GetRowIdParams<WeeklyPlanWideRow>) => String(params.data.programId),
+    (params: GetRowIdParams<WeeklyPlanWideRow>) =>
+      `${params.data.locationId}-${params.data.programId}`,
     []
   )
 
@@ -271,7 +283,7 @@ const InboundWeeklyPlanGrid = ({
 
     // Cells the data window never mentioned have no meta — synthesize the key
     // in the transformer's `${locationId}-${programId}-${effectiveDate}` format.
-    const meta = cellMeta.get(cellMetaKeyFor(data.programId, parsed.weekKey))
+    const meta = cellMeta.get(cellMetaKeyFor(data.locationId, data.programId, parsed.weekKey))
     const editedCell: WeeklyPlanEditedCell = {
       rowKey: meta?.rowKey ?? `${data.locationId}-${data.programId}-${parsed.weekKey}`,
       locationId: data.locationId,
