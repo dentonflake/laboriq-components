@@ -1,14 +1,14 @@
-// Pure pivot + week math for the Inbound Planning Model grid. Deliberately
+// Pure pivot + week math for the Inbound Weekly Plan grid. Deliberately
 // free of AG Grid / Retool imports so it stays unit-testable in isolation
 // (utils/helpers.ts pulls in AG Grid modules at the top, which is why these
 // helpers live here instead).
 
 import {
-  PlanningCellMeta,
-  PlanningModelPivotResult,
-  PlanningModelWideRow,
-  PlanningWeek,
-  RawPlanningModelRow
+  RawWeeklyPlanRow,
+  WeeklyPlanCellMeta,
+  WeeklyPlanPivotResult,
+  WeeklyPlanWeek,
+  WeeklyPlanWideRow
 } from '../../utils/types'
 
 export const PLAN_FIELDS = ['baseline', 'backlog'] as const
@@ -17,8 +17,8 @@ const MS_PER_DAY = 86_400_000
 
 export const toNumber = (value: unknown) => Number(value) || 0
 
-// Normalize an ISO weekStart ('2026-06-01T00:00:00.000Z') to its date part.
-export const weekKeyOf = (weekStart: string) => String(weekStart).slice(0, 10)
+// Normalize an ISO effectiveDate ('2026-07-06T00:00:00.000Z') to its date part.
+export const weekKeyOf = (effectiveDate: string) => String(effectiveDate).slice(0, 10)
 
 // Cell field naming: 'wk-YYYY-MM-DD_{suffix}' — same scheme as inbound-plan.
 export const cellFieldFor = (weekKey: string, suffix: string) =>
@@ -65,59 +65,52 @@ export const isCurrentWeek = (weekKey: string, todayKey: string) =>
 // Pivot long-format program-week rows to wide: one row per program, with
 // 'wk-*' cell fields for every distinct week in the data. Weeks are derived
 // from the data, never hardcoded. Cells the data doesn't mention default to 0.
-export const pivotPlanningRows = (
-  rows: RawPlanningModelRow[]
-): PlanningModelPivotResult => {
+export const pivotWeeklyPlanRows = (
+  rows: RawWeeklyPlanRow[]
+): WeeklyPlanPivotResult => {
 
   type ProgramFields = Pick<
-    PlanningModelWideRow,
-    'programId' | 'locationId' | 'program' | 'type' | 'programProfile'
+    WeeklyPlanWideRow,
+    'programId' | 'locationId' | 'program' | 'programProfile'
   >
 
   const weekKeySet = new Set<string>()
   const programById = new Map<number, ProgramFields>()
-  const cellMeta = new Map<string, PlanningCellMeta>()
+  const cellMeta = new Map<string, WeeklyPlanCellMeta>()
   const valuesByCell = new Map<
     string,
-    { baseline: number, backlog: number, actuals: number | null }
+    { baseline: number, backlog: number }
   >()
-  let hasActuals = false
 
   for (const row of rows) {
     const programId = row.program?.id
-    if (programId == null || !row.weekStart) continue
+    if (programId == null || !row.effectiveDate) continue
 
-    const weekKey = weekKeyOf(row.weekStart)
+    const weekKey = weekKeyOf(row.effectiveDate)
     weekKeySet.add(weekKey)
 
-    // `type` is stable per program within the window, so first row wins.
     if (!programById.has(programId)) {
       programById.set(programId, {
         programId,
         locationId: row.location?.id ?? 0,
         program: row.program?.name ?? `Program ${programId}`,
-        type: row.type ?? '',
         programProfile: row.program?.programProfile ?? ''
       })
     }
 
-    const actuals = row.actuals ?? null
-    if (actuals != null) hasActuals = true
-
     const metaKey = cellMetaKeyFor(programId, weekKey)
     cellMeta.set(metaKey, {
       rowKey: row.id,
-      weekStart: String(row.weekStart),
-      budgetBaseline: row.budgetBaseline ?? null
+      effectiveDate: String(row.effectiveDate),
+      baseline: row.baseline ?? null
     })
     valuesByCell.set(metaKey, {
-      baseline: row.baseline ?? row.budgetBaseline ?? 0,
-      backlog: row.backlog ?? 0,
-      actuals
+      baseline: row.baseline ?? 0,
+      backlog: row.backlog ?? 0
     })
   }
 
-  const weeks: PlanningWeek[] = [...weekKeySet].sort().map(key => ({
+  const weeks: WeeklyPlanWeek[] = [...weekKeySet].sort().map(key => ({
     key,
     header: formatWeekGroupHeader(key)
   }))
@@ -125,44 +118,37 @@ export const pivotPlanningRows = (
   const rowData = [...programById.values()]
     .sort((a, b) => a.program.localeCompare(b.program))
     .map(programFields => {
-      const wide: PlanningModelWideRow = { ...programFields }
+      const wide: WeeklyPlanWideRow = { ...programFields }
       for (const week of weeks) {
         const values = valuesByCell.get(
           cellMetaKeyFor(programFields.programId, week.key)
         )
         wide[cellFieldFor(week.key, 'baseline')] = values?.baseline ?? 0
         wide[cellFieldFor(week.key, 'backlog')] = values?.backlog ?? 0
-        if (hasActuals) {
-          wide[cellFieldFor(week.key, 'actuals')] = values?.actuals ?? 0
-        }
       }
       return wide
     })
 
-  return { rowData, weeks, cellMeta, hasActuals }
+  return { rowData, weeks, cellMeta }
 }
 
 // Pinned-bottom totals row — sums every numeric week cell across programs.
-// Total Plan / Variance columns are valueGetters, so they compute themselves
-// for this row from the summed fields.
+// Total Plan is a valueGetter, so it computes itself for this row from the
+// summed baseline + backlog fields.
 export const buildTotalsRow = (
-  rowData: PlanningModelWideRow[],
-  weeks: PlanningWeek[],
-  hasActuals: boolean
-): PlanningModelWideRow => {
+  rowData: WeeklyPlanWideRow[],
+  weeks: WeeklyPlanWeek[]
+): WeeklyPlanWideRow => {
 
-  const totals: PlanningModelWideRow = {
+  const totals: WeeklyPlanWideRow = {
     programId: 0,
     locationId: 0,
     program: 'Total',
-    type: '',
     programProfile: ''
   }
 
-  const suffixes = hasActuals ? [...PLAN_FIELDS, 'actuals'] : [...PLAN_FIELDS]
-
   for (const week of weeks) {
-    for (const suffix of suffixes) {
+    for (const suffix of PLAN_FIELDS) {
       const cellField = cellFieldFor(week.key, suffix)
       totals[cellField] = rowData.reduce(
         (sum, row) => sum + toNumber(row[cellField]),

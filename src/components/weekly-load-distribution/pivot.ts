@@ -1,6 +1,6 @@
 // Pure pivot + formatting config for the Weekly Load Distribution grid.
 // Deliberately free of AG Grid / Retool imports so it stays unit-testable in
-// isolation (same reasoning as inbound-planning-model/pivot.ts).
+// isolation (same reasoning as inbound-weekly-plan/pivot.ts).
 
 import {
   LoadDistributionLocation,

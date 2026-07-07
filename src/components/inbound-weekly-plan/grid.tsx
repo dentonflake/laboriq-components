@@ -14,10 +14,10 @@ import { Retool } from '@tryretool/custom-component-support'
 import { AgGridReact } from 'ag-grid-react'
 import styles from '../../styles/insights.module.css'
 import {
-  InboundPlanningModelGridProps,
-  PlanningModelEditedCell,
-  PlanningModelWideRow,
-  PlanningWeek
+  InboundWeeklyPlanGridProps,
+  WeeklyPlanEditedCell,
+  WeeklyPlanWideRow,
+  WeeklyPlanWeek
 } from '../../utils/types'
 import { ensureAgGridInitialized } from '../../utils/helpers'
 import {
@@ -27,7 +27,7 @@ import {
   isCurrentWeek,
   isPastWeek,
   parseCellField,
-  pivotPlanningRows,
+  pivotWeeklyPlanRows,
   toNumber
 } from './pivot'
 
@@ -35,7 +35,6 @@ const CURRENT_WEEK_BG = 'var(--color-primary-050)'
 const COMPUTED_CELL_BG = '#f5f5f4'
 const OVERRIDE_CELL_BG = '#fef3c7'
 const READ_ONLY_TEXT = 'var(--color-neutral-500)'
-const NEGATIVE_TEXT = '#dc2626'
 
 // Local calendar date ('YYYY-MM-DD') — current-week detection follows the
 // user's timezone while week keys come from the data's UTC week starts.
@@ -46,10 +45,10 @@ const localTodayKey = () => {
   return `${now.getFullYear()}-${month}-${day}`
 }
 
-const InboundPlanningModelGrid = ({
+const InboundWeeklyPlanGrid = ({
   rows,
   agGridLicenseKey
-}: InboundPlanningModelGridProps) => {
+}: InboundWeeklyPlanGridProps) => {
 
   const [gridInitialized, setGridInitialized] = useState(false)
 
@@ -70,25 +69,25 @@ const InboundPlanningModelGrid = ({
 
   const todayKey = useMemo(localTodayKey, [])
 
-  const { rowData, weeks, cellMeta, hasActuals } = useMemo(
-    () => pivotPlanningRows(rows ?? []),
+  const { rowData, weeks, cellMeta } = useMemo(
+    () => pivotWeeklyPlanRows(rows ?? []),
     [rows]
   )
 
   // Edits mutate AG Grid's row objects in place, so the memo over `rowData`
   // alone wouldn't see them — onCellValueChanged rebuilds the totals from the
   // grid's live rows, and a fresh data prop resets back to the base totals.
-  const baseTotals = useMemo<PlanningModelWideRow[]>(
-    () => (rowData.length > 0 ? [buildTotalsRow(rowData, weeks, hasActuals)] : []),
-    [rowData, weeks, hasActuals]
+  const baseTotals = useMemo<WeeklyPlanWideRow[]>(
+    () => (rowData.length > 0 ? [buildTotalsRow(rowData, weeks)] : []),
+    [rowData, weeks]
   )
-  const [editedTotals, setEditedTotals] = useState<PlanningModelWideRow[] | null>(null)
+  const [editedTotals, setEditedTotals] = useState<WeeklyPlanWideRow[] | null>(null)
   useEffect(() => setEditedTotals(null), [rowData])
   const pinnedBottomRowData = editedTotals ?? baseTotals
 
-  const colDefs = useMemo<(ColDef<PlanningModelWideRow> | ColGroupDef<PlanningModelWideRow>)[]>(() => {
+  const colDefs = useMemo<(ColDef<WeeklyPlanWideRow> | ColGroupDef<WeeklyPlanWideRow>)[]>(() => {
 
-    const programCol: ColDef<PlanningModelWideRow> = {
+    const programCol: ColDef<WeeklyPlanWideRow> = {
       field: 'program',
       headerName: 'Program',
       pinned: 'left',
@@ -98,21 +97,7 @@ const InboundPlanningModelGrid = ({
       cellStyle: { fontWeight: 600 }
     }
 
-    // const typeCol: ColDef<PlanningModelWideRow> = {
-    //   field: 'type',
-    //   headerName: 'Budget/Revision',
-    //   pinned: 'left',
-    //   flex: 0,
-    //   width: 140,
-    //   valueFormatter: params => {
-    //     const value = String(params.value ?? '').toLowerCase()
-    //     if (value === 'budget') return 'Budget'
-    //     if (value === 'revision') return 'Revision'
-    //     return ''
-    //   }
-    // }
-
-    const profileCol: ColDef<PlanningModelWideRow> = {
+    const profileCol: ColDef<WeeklyPlanWideRow> = {
       field: 'programProfile',
       headerName: 'Profile',
       pinned: 'left',
@@ -121,23 +106,22 @@ const InboundPlanningModelGrid = ({
       tooltipField: 'programProfile'
     }
 
-    const buildWeekGroup = (week: PlanningWeek): ColGroupDef<PlanningModelWideRow> => {
+    const buildWeekGroup = (week: WeeklyPlanWeek): ColGroupDef<WeeklyPlanWideRow> => {
 
       const baselineField = cellFieldFor(week.key, 'baseline')
       const backlogField = cellFieldFor(week.key, 'backlog')
-      const actualsField = cellFieldFor(week.key, 'actuals')
 
       const current = isCurrentWeek(week.key, todayKey)
       const weekEditable = !isPastWeek(week.key, todayKey)
       const headerClass = current ? styles.currentWeekHeader : undefined
 
-      const editable = (params: EditableCallbackParams<PlanningModelWideRow>) =>
+      const editable = (params: EditableCallbackParams<WeeklyPlanWideRow>) =>
         weekEditable && !params.node.rowPinned
 
-      const metaFor = (data: PlanningModelWideRow | undefined) =>
+      const metaFor = (data: WeeklyPlanWideRow | undefined) =>
         data ? cellMeta.get(cellMetaKeyFor(data.programId, week.key)) : undefined
 
-      const totalPlanGetter = (params: ValueGetterParams<PlanningModelWideRow>) =>
+      const totalPlanGetter = (params: ValueGetterParams<WeeklyPlanWideRow>) =>
         toNumber(params.data?.[baselineField]) + toNumber(params.data?.[backlogField])
 
       // Current-week tint applies to headers (via headerClass) and the pinned
@@ -145,7 +129,7 @@ const InboundPlanningModelGrid = ({
       // stale cellStyle properties unless every branch returns them
       // explicitly, hence the always-present defaults.
       const editableCellStyle = (
-        params: CellClassParams<PlanningModelWideRow>,
+        params: CellClassParams<WeeklyPlanWideRow>,
         overridden: boolean
       ) => ({
         backgroundColor: overridden
@@ -155,20 +139,19 @@ const InboundPlanningModelGrid = ({
         color: weekEditable ? 'inherit' : READ_ONLY_TEXT
       })
 
-      // Overridden = baseline differs from the budget baseline (only knowable
-      // when the transformer sends budgetBaseline). Typing the exact budget
-      // value reads as "no override" — the event still fires so Retool can
-      // delete the override row.
-      const baselineCellStyle = (params: CellClassParams<PlanningModelWideRow>) => {
-        const budgetBaseline = metaFor(params.data)?.budgetBaseline
+      // Overridden = current value differs from the fetched baseline. Typing
+      // the exact fetched value reads as "no override" — the event still fires
+      // so Retool can decide what that means.
+      const baselineCellStyle = (params: CellClassParams<WeeklyPlanWideRow>) => {
+        const baseline = metaFor(params.data)?.baseline
         const overridden =
           !params.node.rowPinned &&
-          budgetBaseline != null &&
-          toNumber(params.value) !== budgetBaseline
+          baseline != null &&
+          toNumber(params.value) !== baseline
         return editableCellStyle(params, overridden)
       }
 
-      const computedCellStyle = (params: CellClassParams<PlanningModelWideRow>) => ({
+      const computedCellStyle = (params: CellClassParams<WeeklyPlanWideRow>) => ({
         backgroundColor: current && params.node.rowPinned
           ? CURRENT_WEEK_BG
           : COMPUTED_CELL_BG
@@ -182,22 +165,22 @@ const InboundPlanningModelGrid = ({
         return Number.isInteger(value) && value >= 0 ? value : undefined
       }
 
-      const baselineParser = (params: ValueParserParams<PlanningModelWideRow>) => {
+      const baselineParser = (params: ValueParserParams<WeeklyPlanWideRow>) => {
         const parsed = parseNonNegativeInt(params.newValue)
         if (parsed === undefined) return toNumber(params.oldValue)
         if (parsed !== null) return parsed
-        // Cleared — revert to the budget baseline when the data provides one,
+        // Cleared — revert to the fetched baseline when the data provides one,
         // otherwise keep the previous value (there's nothing to revert to).
-        return metaFor(params.data)?.budgetBaseline ?? toNumber(params.oldValue)
+        return metaFor(params.data)?.baseline ?? toNumber(params.oldValue)
       }
 
-      const backlogParser = (params: ValueParserParams<PlanningModelWideRow>) => {
+      const backlogParser = (params: ValueParserParams<WeeklyPlanWideRow>) => {
         const parsed = parseNonNegativeInt(params.newValue)
         if (parsed === undefined) return toNumber(params.oldValue)
         return parsed ?? 0
       }
 
-      const children: ColDef<PlanningModelWideRow>[] = [
+      const children: ColDef<WeeklyPlanWideRow>[] = [
         {
           headerName: 'Baseline',
           field: baselineField,
@@ -233,32 +216,6 @@ const InboundPlanningModelGrid = ({
         }
       ]
 
-      if (hasActuals) {
-        children.push(
-          {
-            headerName: 'Actuals',
-            field: actualsField,
-            type: 'numericColumn',
-            cellDataType: 'number',
-            headerClass,
-            cellStyle: computedCellStyle
-          },
-          {
-            headerName: 'Variance',
-            colId: cellFieldFor(week.key, 'variance'),
-            type: 'numericColumn',
-            cellDataType: 'number',
-            headerClass,
-            valueGetter: params =>
-              toNumber(params.data?.[actualsField]) - totalPlanGetter(params),
-            cellStyle: params => ({
-              ...computedCellStyle(params),
-              color: toNumber(params.value) < 0 ? NEGATIVE_TEXT : 'inherit'
-            })
-          }
-        )
-      }
-
       return {
         headerName: week.header,
         groupId: `wk-${week.key}`,
@@ -269,16 +226,15 @@ const InboundPlanningModelGrid = ({
 
     return [
       programCol,
-      // typeCol,
       profileCol,
       ...weeks.map(buildWeekGroup)
     ]
 
-  }, [weeks, cellMeta, hasActuals, todayKey])
+  }, [weeks, cellMeta, todayKey])
 
-  const defaultColDef = useMemo<ColDef<PlanningModelWideRow>>(() => ({
+  const defaultColDef = useMemo<ColDef<WeeklyPlanWideRow>>(() => ({
     flex: 1,
-    // 125 fits 'Total Plan' / 'Variance' once the column menu kebab is hidden.
+    // 125 fits 'Total Plan' once the column menu kebab is hidden.
     minWidth: 125,
     suppressHeaderMenuButton: true,
     filterParams: {
@@ -296,31 +252,31 @@ const InboundPlanningModelGrid = ({
   }), [])
 
   const getRowId = useCallback(
-    (params: GetRowIdParams<PlanningModelWideRow>) => String(params.data.programId),
+    (params: GetRowIdParams<WeeklyPlanWideRow>) => String(params.data.programId),
     []
   )
 
-  const onCellValueChanged = useCallback((event: CellValueChangedEvent<PlanningModelWideRow>) => {
+  const onCellValueChanged = useCallback((event: CellValueChangedEvent<WeeklyPlanWideRow>) => {
     if (event.node.rowPinned) return
 
     const parsed = parseCellField(String(event.colDef.field ?? ''))
     const data = event.data
     if (!parsed || !data) return
 
-    const liveRows: PlanningModelWideRow[] = []
+    const liveRows: WeeklyPlanWideRow[] = []
     event.api.forEachNode(node => {
       if (node.data) liveRows.push(node.data)
     })
-    setEditedTotals([buildTotalsRow(liveRows, weeks, hasActuals)])
+    setEditedTotals([buildTotalsRow(liveRows, weeks)])
 
     // Cells the data window never mentioned have no meta — synthesize the key
-    // in the transformer's `${locationId}-${programId}-${weekStart}` format.
+    // in the transformer's `${locationId}-${programId}-${effectiveDate}` format.
     const meta = cellMeta.get(cellMetaKeyFor(data.programId, parsed.weekKey))
-    const editedCell: PlanningModelEditedCell = {
+    const editedCell: WeeklyPlanEditedCell = {
       rowKey: meta?.rowKey ?? `${data.locationId}-${data.programId}-${parsed.weekKey}`,
       locationId: data.locationId,
       programId: data.programId,
-      weekStart: meta?.weekStart ?? `${parsed.weekKey}T00:00:00.000Z`,
+      effectiveDate: meta?.effectiveDate ?? `${parsed.weekKey}T00:00:00.000Z`,
       field: parsed.field,
       previousValue: toNumber(event.oldValue),
       newValue: toNumber(event.newValue)
@@ -328,14 +284,14 @@ const InboundPlanningModelGrid = ({
 
     setLastEditedCell(editedCell as Retool.SerializableObject)
     triggerCellValueChanged()
-  }, [weeks, hasActuals, cellMeta, setLastEditedCell, triggerCellValueChanged])
+  }, [weeks, cellMeta, setLastEditedCell, triggerCellValueChanged])
 
   if (!gridInitialized) return null
 
   return (
     <section className={styles.container}>
       <div className={styles.grid}>
-        <AgGridReact<PlanningModelWideRow>
+        <AgGridReact<WeeklyPlanWideRow>
           rowData={rowData}
           pinnedBottomRowData={pinnedBottomRowData}
           columnDefs={colDefs}
@@ -350,4 +306,4 @@ const InboundPlanningModelGrid = ({
   )
 }
 
-export default InboundPlanningModelGrid
+export default InboundWeeklyPlanGrid

@@ -157,71 +157,64 @@ export type InboundPlanGridProps = {
   agGridLicenseKey?: string
 }
 
-// ── Inbound Planning Model ────────────────────────────────────────────────────
+// ── Inbound Weekly Plan ───────────────────────────────────────────────────────
 
 // Long-format row from the Retool transformer — one per (location × program ×
-// week). `type`, `budgetBaseline`, `baselineOverride` and `actuals` are
-// planned additions to the transformer; the component degrades gracefully
-// while they're absent.
-export type RawPlanningModelRow = {
-  id: string                          // `${locationId}-${programId}-${weekStart}`
-  weekStart: string                   // ISO, e.g. '2026-06-01T00:00:00.000Z'
-  baseline: number | null             // COALESCE(baselineOverride, budgetBaseline)
+// week). `timezone` rides along on the location object but isn't used (the
+// grid keys weeks off the date part of effectiveDate).
+export type RawWeeklyPlanRow = {
+  id: string                          // `${locationId}-${programId}-${effectiveDate}`
+  effectiveDate: string               // ISO, e.g. '2026-07-06T00:00:00.000Z'
+  baseline: number | null
   backlog: number | null
   totalPlan: number | null
-  type?: 'Budget' | 'Revision' | null
-  budgetBaseline?: number | null
-  baselineOverride?: number | null
-  actuals?: number | null
-  location: { id: number, name: string } | null
+  location: { id: number, name: string, timezone?: string | null } | null
   program: { id: number, name: string, programProfile: string | null } | null
 }
 
-export type PlanningWeek = {
+export type WeeklyPlanWeek = {
   key: string                         // normalized 'YYYY-MM-DD' week start
   header: string                      // 'Wk 24 · 6/8/2026'
 }
 
 // Per (program × week) facts the wide row doesn't carry — original row key,
-// original weekStart string, and the budget baseline used for override
+// original effectiveDate string, and the fetched baseline used for override
 // styling / clear-to-revert. Keyed by `${programId}|${weekKey}`.
-export type PlanningCellMeta = {
+export type WeeklyPlanCellMeta = {
   rowKey: string
-  weekStart: string
-  budgetBaseline: number | null
+  effectiveDate: string
+  baseline: number | null
 }
 
 // Wide row shape for column-group rendering — one row per program with
 // dynamic cell fields keyed by week (e.g. 'wk-2026-06-01_baseline').
-export type PlanningModelWideRow = {
+export type WeeklyPlanWideRow = {
   programId: number
   locationId: number
   program: string
-  type: string
   programProfile: string
   [cellField: string]: number | string
 }
 
-export type PlanningModelPivotResult = {
-  rowData: PlanningModelWideRow[]
-  weeks: PlanningWeek[]
-  cellMeta: Map<string, PlanningCellMeta>
-  hasActuals: boolean
+export type WeeklyPlanPivotResult = {
+  rowData: WeeklyPlanWideRow[]
+  weeks: WeeklyPlanWeek[]
+  cellMeta: Map<string, WeeklyPlanCellMeta>
 }
 
 // Payload exposed as `lastEditedCell` state when `cellValueChanged` fires.
-export type PlanningModelEditedCell = {
+export type WeeklyPlanEditedCell = {
   rowKey: string
   locationId: number
   programId: number
-  weekStart: string
+  effectiveDate: string
   field: 'baseline' | 'backlog'
   previousValue: number
   newValue: number
 }
 
-export type InboundPlanningModelGridProps = {
-  rows: RawPlanningModelRow[]
+export type InboundWeeklyPlanGridProps = {
+  rows: RawWeeklyPlanRow[]
   agGridLicenseKey?: string
 }
 
