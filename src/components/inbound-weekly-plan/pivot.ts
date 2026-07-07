@@ -55,7 +55,7 @@ export const isoWeekNumber = (weekKey: string) => {
 
 export const formatWeekGroupHeader = (weekKey: string) => {
   const [year, month, day] = weekKey.split('-').map(Number)
-  return `Wk ${isoWeekNumber(weekKey)} · ${month}/${day}/${year}`
+  return `Week ${isoWeekNumber(weekKey)} · ${month}/${day}/${year}`
 }
 
 // ISO date keys compare correctly as strings, so week membership is plain
@@ -75,7 +75,7 @@ export const pivotWeeklyPlanRows = (
 
   type ProgramFields = Pick<
     WeeklyPlanWideRow,
-    'programId' | 'locationId' | 'location' | 'program' | 'programProfile'
+    'programId' | 'locationId' | 'location' | 'program'
   >
 
   const weekKeySet = new Set<string>()
@@ -100,8 +100,7 @@ export const pivotWeeklyPlanRows = (
         programId,
         locationId,
         location: row.location?.name ?? `Location ${locationId}`,
-        program: row.program?.name ?? `Program ${programId}`,
-        programProfile: row.program?.programProfile ?? ''
+        program: row.program?.name ?? `Program ${programId}`
       })
     }
 
@@ -153,8 +152,7 @@ export const buildTotalsRow = (
     programId: 0,
     locationId: 0,
     location: '',
-    program: 'Total',
-    programProfile: ''
+    program: 'Total'
   }
 
   for (const week of weeks) {

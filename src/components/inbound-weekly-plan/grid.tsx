@@ -102,18 +102,9 @@ const InboundWeeklyPlanGrid = ({
       headerName: 'Program',
       pinned: 'left',
       flex: 0,
-      width: 240,
+      width: 150,
       tooltipField: 'program',
       cellStyle: { fontWeight: 600 }
-    }
-
-    const profileCol: ColDef<WeeklyPlanWideRow> = {
-      field: 'programProfile',
-      headerName: 'Profile',
-      pinned: 'left',
-      flex: 0,
-      width: 150,
-      tooltipField: 'programProfile'
     }
 
     const buildWeekGroup = (week: WeeklyPlanWeek): ColGroupDef<WeeklyPlanWideRow> => {
@@ -237,7 +228,6 @@ const InboundWeeklyPlanGrid = ({
     return [
       locationCol,
       programCol,
-      profileCol,
       ...weeks.map(buildWeekGroup)
     ]
 

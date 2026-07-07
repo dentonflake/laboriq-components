@@ -2,7 +2,7 @@
 
 Weekly inbound planning grid replicating the per-location weekly view from the
 2026 Inbound Planning Model spreadsheet — one row per (location × program),
-pinned-left Location / Program / Profile columns, one column group per week
+pinned-left Location and Program columns, one column group per week
 (Baseline / Backlog / Total Plan), pinned totals row at the bottom.
 
 ## Retool wiring

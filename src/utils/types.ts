@@ -193,7 +193,6 @@ export type WeeklyPlanWideRow = {
   locationId: number
   location: string
   program: string
-  programProfile: string
   [cellField: string]: number | string
 }
 
