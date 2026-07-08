@@ -1,37 +1,22 @@
-import {
-  CellClassParams,
-  ColDef,
-  GetRowIdParams,
-  themeQuartz,
-  ValueFormatterParams
-} from 'ag-grid-community'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { Retool } from '@tryretool/custom-component-support'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AgGridReact } from 'ag-grid-react'
+import { ColDef, StateUpdatedEvent, themeQuartz } from 'ag-grid-community'
 import styles from '../../styles/insights.module.css'
-import {
-  LoadDistributionWideRow,
-  WeeklyLoadDistributionGridProps
-} from '../../utils/types'
+import { LoadDistributionRow, WeeklyLoadDistributionGridProps } from '../../utils/types'
 import { ensureAgGridInitialized } from '../../utils/helpers'
-import {
-  locationFieldFor,
-  METRICS,
-  normalizeMetric,
-  pivotLoadDistribution
-} from './pivot'
-
-const TOTAL_CELL_BG = '#f5f5f4'
-
-// Judgment call (matches the spreadsheet): a program with no plan at a
-// location renders blank, not '0'. Flip to false to show zeros — totals
-// already count missing cells as 0 either way.
-const BLANK_MISSING_CELLS = true
 
 const WeeklyLoadDistributionGrid = ({
-  rows,
-  metric,
+  rowData,
+  gridState,
   agGridLicenseKey
 }: WeeklyLoadDistributionGridProps) => {
+
+  const [, setCurrentGridState] = Retool.useStateObject({
+    name: 'currentGridState',
+    inspector: 'hidden',
+    initialValue: {}
+  })
 
   const [gridInitialized, setGridInitialized] = useState(false)
 
@@ -40,88 +25,90 @@ const WeeklyLoadDistributionGrid = ({
     setGridInitialized(true)
   }, [agGridLicenseKey])
 
-  const metricKey = normalizeMetric(metric)
+  const gridRef = useRef<AgGridReact<LoadDistributionRow>>(null)
 
-  // Everything below is derived from the data — replacing the `rows` prop
-  // rebuilds rows, location columns and all totals with no state to reset.
-  const { rowData, locations, totalsRow, hasProfiles } = useMemo(
-    () => pivotLoadDistribution(rows ?? [], metricKey),
-    [rows, metricKey]
-  )
-
-  const pinnedBottomRowData = useMemo<LoadDistributionWideRow[]>(
-    () => (totalsRow ? [totalsRow] : []),
-    [totalsRow]
-  )
-
-  const colDefs = useMemo<ColDef<LoadDistributionWideRow>[]>(() => {
-
-    const { format } = METRICS[metricKey]
-
-    const numberFormatter = (params: ValueFormatterParams<LoadDistributionWideRow>) => {
-      if (params.value == null) return BLANK_MISSING_CELLS ? '' : format(0)
-      return format(Number(params.value))
-    }
-
-    // Bold the pinned totals row; AG Grid keeps stale cellStyle properties
-    // unless every branch returns them, hence the explicit 'normal'.
-    const locationCellStyle = (params: CellClassParams<LoadDistributionWideRow>) => ({
-      fontWeight: params.node.rowPinned ? 600 : 'normal'
-    })
-
-    const programCol: ColDef<LoadDistributionWideRow> = {
+  // Dimensions can be dragged to Row Groups / Column Labels; measures to
+  // Values. The user builds the pivot from the sidebar — nothing is grouped
+  // by default.
+  const [colDefs] = useState<ColDef<LoadDistributionRow>[]>([
+    {
+      field: 'effectiveDate',
+      headerName: 'Week',
+      filter: 'agSetColumnFilter',
+      sort: 'asc',
+      enablePivot: true,
+      enableRowGroup: true
+    },
+    {
+      field: 'location',
+      headerName: 'Location',
+      filter: 'agSetColumnFilter',
+      enablePivot: true,
+      enableRowGroup: true
+    },
+    {
       field: 'program',
       headerName: 'Program',
-      pinned: 'left',
-      flex: 0,
-      width: 240,
-      tooltipField: 'program',
-      cellStyle: { fontWeight: 600 }
-    }
-
-    const profileCol: ColDef<LoadDistributionWideRow> = {
+      filter: 'agSetColumnFilter',
+      enablePivot: true,
+      enableRowGroup: true
+    },
+    {
       field: 'programProfile',
       headerName: 'Profile',
-      pinned: 'left',
-      flex: 0,
-      width: 150,
-      tooltipField: 'programProfile'
-    }
-
-    const locationCols: ColDef<LoadDistributionWideRow>[] = locations.map(location => ({
-      field: locationFieldFor(location.id),
-      headerName: location.name,
+      filter: 'agSetColumnFilter',
+      enablePivot: true,
+      enableRowGroup: true
+    },
+    {
+      field: 'carrier',
+      headerName: 'Carrier',
+      filter: 'agSetColumnFilter',
+      enablePivot: true,
+      enableRowGroup: true
+    },
+    {
+      field: 'budgetType',
+      headerName: 'Budget Type',
+      filter: 'agSetColumnFilter',
+      enablePivot: true,
+      enableRowGroup: true
+    },
+    {
+      field: 'baseline',
+      headerName: 'Baseline',
+      filter: 'agNumberColumnFilter',
       type: 'numericColumn',
-      valueFormatter: numberFormatter,
-      cellStyle: locationCellStyle
-    }))
-
-    const grandTotalCol: ColDef<LoadDistributionWideRow> = {
-      field: 'grandTotal',
-      headerName: 'Grand Total',
-      pinned: 'right',
-      flex: 0,
-      width: 140,
+      aggFunc: 'sum',
+      enableValue: true
+    },
+    {
+      field: 'backlog',
+      headerName: 'Backlog',
+      filter: 'agNumberColumnFilter',
       type: 'numericColumn',
-      valueFormatter: numberFormatter,
-      cellStyle: { fontWeight: 600, backgroundColor: TOTAL_CELL_BG }
+      aggFunc: 'sum',
+      enableValue: true
+    },
+    {
+      field: 'totalPlan',
+      headerName: 'Total Plan',
+      filter: 'agNumberColumnFilter',
+      type: 'numericColumn',
+      aggFunc: 'sum',
+      enableValue: true
     }
+  ])
 
-    return [
-      programCol,
-      ...(hasProfiles ? [profileCol] : []),
-      ...locationCols,
-      grandTotalCol
-    ]
-
-  }, [locations, hasProfiles, metricKey])
-
-  const defaultColDef = useMemo<ColDef<LoadDistributionWideRow>>(() => ({
+  const defaultColDef = useMemo<ColDef<LoadDistributionRow>>(() => ({
     flex: 1,
-    minWidth: 110,
-    suppressHeaderMenuButton: true,
+    minWidth: 150,
     filterParams: {
       buttons: ['reset']
+    },
+    // Hide the "(n)" row-count suffix on group labels.
+    cellRendererParams: {
+      suppressCount: true
     }
   }), [])
 
@@ -134,24 +121,70 @@ const WeeklyLoadDistributionGrid = ({
     wrapperBorder: 'rgba(0, 0, 0, 0)'
   }), [])
 
-  const getRowId = useCallback(
-    (params: GetRowIdParams<LoadDistributionWideRow>) => String(params.data.programId),
-    []
-  )
+  const debounceTimeoutRef = useRef<number | null>(null)
+
+  const onStateUpdated = useCallback((_event: StateUpdatedEvent) => {
+    if (!gridRef.current) return
+    if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current)
+
+    debounceTimeoutRef.current = window.setTimeout(() => {
+      const state = gridRef.current!.api.getState()
+      setCurrentGridState(state as Retool.SerializableObject)
+    }, 200)
+  }, [setCurrentGridState])
+
+  const onFirstDataRendered = useCallback(() => {
+    if (!gridRef.current?.api || !gridState) return
+    gridRef.current.api.setState(gridState)
+  }, [gridState])
+
+  // Called for every group node as it's (re)created — unlike groupDefaultExpanded
+  // this survives a query refresh, so row groups stay expanded on new data.
+  const isGroupOpenByDefault = useCallback(() => true, [])
+
+  // Pivot column groups have no per-group "open by default" hook, so re-open
+  // them explicitly whenever new data rebuilds them.
+  const onRowDataUpdated = useCallback(() => {
+    const api = gridRef.current?.api
+    if (!api) return
+    const groupState = api.getColumnGroupState()
+    if (groupState.some(group => !group.open)) {
+      api.setColumnGroupState(groupState.map(group => ({ groupId: group.groupId, open: true })))
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!gridRef.current?.api || !gridState) return
+    gridRef.current.api.setState(gridState)
+  }, [gridState])
+
+  useEffect(() => () => {
+    if (debounceTimeoutRef.current) window.clearTimeout(debounceTimeoutRef.current)
+  }, [])
 
   if (!gridInitialized) return null
 
   return (
     <section className={styles.container}>
       <div className={styles.grid}>
-        <AgGridReact<LoadDistributionWideRow>
+        <AgGridReact<LoadDistributionRow>
+          ref={gridRef}
           rowData={rowData}
-          pinnedBottomRowData={pinnedBottomRowData}
           columnDefs={colDefs}
           defaultColDef={defaultColDef}
+          suppressAggFuncInHeader={true}
+          grandTotalRow="bottom"
+          pivotRowTotals="after"
+          groupDefaultExpanded={-1}
+          pivotDefaultExpanded={-1}
+          isGroupOpenByDefault={isGroupOpenByDefault}
+          sideBar
+          enableCharts
           theme={theme}
-          getRowId={getRowId}
-          cellSelection={true}
+          cellSelection
+          onStateUpdated={onStateUpdated}
+          onFirstDataRendered={onFirstDataRendered}
+          onRowDataUpdated={onRowDataUpdated}
         />
       </div>
     </section>

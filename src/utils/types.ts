@@ -220,45 +220,38 @@ export type InboundWeeklyPlanGridProps = {
 
 // ── Weekly Load Distribution ──────────────────────────────────────────────────
 
-export type LoadDistributionMetric = 'loads' | 'units' | 'revenue'
-
-// Long-format row from the Retool transformer — one per (program × location),
-// all for the same week. `units` and `revenue` are planned additions; the
-// component degrades gracefully while they're absent.
+// Long-format row from the Retool transformer — one per (location × program ×
+// week). `carrier` is optional (some rows omit it); `budgetType.color` rides
+// along but isn't used by the grid.
 export type RawLoadDistributionRow = {
-  totalPlan: number | null              // planned loads = baseline + backlog
-  units?: number | null
-  revenue?: number | null
-  location: { id: number, name: string, sortOrder?: number | null } | null
+  id: string
+  effectiveDate: string
+  baseline: number | null
+  backlog: number | null
+  totalPlan: number | null
+  location: { id: number, name: string, timezone?: string | null } | null
   program: { id: number, name: string, programProfile: string | null } | null
+  carrier?: { id: number, name: string } | null
+  budgetType?: { id: string, label: string, color?: string | null } | null
 }
 
-export type LoadDistributionLocation = {
-  id: number
-  name: string
-  sortOrder: number | null
-}
-
-// Wide row shape — one row per program with dynamic 'loc-{id}' cell fields.
-// A null cell means the program has no plan at that location (rendered blank,
-// counted as 0 in totals).
-export type LoadDistributionWideRow = {
-  programId: number
+// Flat row fed straight to AG Grid — grouping, pivoting and filtering are all
+// handled by the grid's built-in tool panels (sidebar), so there's no
+// pre-pivot step.
+export type LoadDistributionRow = {
+  effectiveDate: string
+  location: string
   program: string
   programProfile: string
-  grandTotal: number
-  [cellField: string]: number | string | null
-}
-
-export type LoadDistributionPivotResult = {
-  rowData: LoadDistributionWideRow[]
-  locations: LoadDistributionLocation[]
-  totalsRow: LoadDistributionWideRow | null
-  hasProfiles: boolean
+  carrier: string
+  budgetType: string
+  baseline: number
+  backlog: number
+  totalPlan: number
 }
 
 export type WeeklyLoadDistributionGridProps = {
-  rows: RawLoadDistributionRow[]
-  metric?: string
+  rowData: LoadDistributionRow[]
+  gridState?: GridState
   agGridLicenseKey?: string
 }
