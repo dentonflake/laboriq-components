@@ -17,8 +17,8 @@ const MS_PER_DAY = 86_400_000
 
 export const toNumber = (value: unknown) => Number(value) || 0
 
-// Normalize an ISO effectiveDate ('2026-07-06T00:00:00.000Z') to its date part.
-export const weekKeyOf = (effectiveDate: string) => String(effectiveDate).slice(0, 10)
+// Normalize an ISO effectiveWeek ('2026-07-06T00:00:00.000Z') to its date part.
+export const weekKeyOf = (effectiveWeek: string) => String(effectiveWeek).slice(0, 10)
 
 // Cell field naming: 'wk-YYYY-MM-DD_{suffix}' — same scheme as inbound-plan.
 export const cellFieldFor = (weekKey: string, suffix: string) =>
@@ -68,7 +68,9 @@ export const isCurrentWeek = (weekKey: string, todayKey: string) =>
 
 // Pivot long-format program-week rows to wide: one row per program, with
 // 'wk-*' cell fields for every distinct week in the data. Weeks are derived
-// from the data, never hardcoded. Cells the data doesn't mention default to 0.
+// from the data, never hardcoded. Cells the data doesn't mention are null
+// (blank), not 0 — "no budget in effect" and "backlog not entered" are real
+// states the grid must render distinctly from an explicit 0.
 export const pivotWeeklyPlanRows = (
   rows: RawWeeklyPlanRow[]
 ): WeeklyPlanPivotResult => {
@@ -83,15 +85,15 @@ export const pivotWeeklyPlanRows = (
   const cellMeta = new Map<string, WeeklyPlanCellMeta>()
   const valuesByCell = new Map<
     string,
-    { baseline: number, backlog: number }
+    { baseline: number | null, backlog: number | null }
   >()
 
   for (const row of rows) {
     const programId = row.program?.id
-    if (programId == null || !row.effectiveDate) continue
+    if (programId == null || !row.effectiveWeek) continue
 
     const locationId = row.location?.id ?? 0
-    const weekKey = weekKeyOf(row.effectiveDate)
+    const weekKey = weekKeyOf(row.effectiveWeek)
     weekKeySet.add(weekKey)
 
     const rowKey = rowKeyFor(locationId, programId)
@@ -107,12 +109,14 @@ export const pivotWeeklyPlanRows = (
     const metaKey = cellMetaKeyFor(locationId, programId, weekKey)
     cellMeta.set(metaKey, {
       rowKey: row.id,
-      effectiveDate: String(row.effectiveDate),
-      baseline: row.baseline ?? null
+      effectiveWeek: String(row.effectiveWeek),
+      budgetBaseline: row.budgetBaseline ?? null,
+      loadsPerWeekOverride: row.loadsPerWeekOverride ?? null
     })
     valuesByCell.set(metaKey, {
-      baseline: row.baseline ?? 0,
-      backlog: row.backlog ?? 0
+      // Resolved baseline — coalesce(override, budget); null when neither.
+      baseline: row.baseline ?? row.loadsPerWeekOverride ?? row.budgetBaseline ?? null,
+      backlog: row.backlog ?? null
     })
   }
 
@@ -131,8 +135,8 @@ export const pivotWeeklyPlanRows = (
         const values = valuesByCell.get(
           cellMetaKeyFor(programFields.locationId, programFields.programId, week.key)
         )
-        wide[cellFieldFor(week.key, 'baseline')] = values?.baseline ?? 0
-        wide[cellFieldFor(week.key, 'backlog')] = values?.backlog ?? 0
+        wide[cellFieldFor(week.key, 'baseline')] = values?.baseline ?? null
+        wide[cellFieldFor(week.key, 'backlog')] = values?.backlog ?? null
       }
       return wide
     })

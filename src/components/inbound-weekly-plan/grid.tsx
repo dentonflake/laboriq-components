@@ -116,14 +116,34 @@ const InboundWeeklyPlanGrid = ({
       const weekEditable = !isPastWeek(week.key, todayKey)
       const headerClass = current ? styles.currentWeekHeader : undefined
 
-      const editable = (params: EditableCallbackParams<WeeklyPlanWideRow>) =>
-        weekEditable && !params.node.rowPinned
-
       const metaFor = (data: WeeklyPlanWideRow | undefined) =>
         data ? cellMeta.get(cellMetaKeyFor(data.locationId, data.programId, week.key)) : undefined
 
-      const totalPlanGetter = (params: ValueGetterParams<WeeklyPlanWideRow>) =>
-        toNumber(params.data?.[baselineField]) + toNumber(params.data?.[backlogField])
+      // Backlog is enterable for any non-past week — backlog can exist even
+      // where no budget does. Baseline edits are *overrides*, and an override
+      // requires an ACTIVE budget: loads > 0. A 0-loads budget is a
+      // terminator — the program is unbudgeted that week (and terminator rows
+      // carry no carrier to inherit), so adding loads there is budget-builder
+      // territory, not an override. The stored-override clause keeps stray
+      // overrides clearable if one exists without an active budget.
+      const backlogEditable = (params: EditableCallbackParams<WeeklyPlanWideRow>) =>
+        weekEditable && !params.node.rowPinned
+
+      const baselineEditable = (params: EditableCallbackParams<WeeklyPlanWideRow>) => {
+        if (!weekEditable || params.node.rowPinned) return false
+        const meta = metaFor(params.data)
+        const budgetActive = meta?.budgetBaseline != null && meta.budgetBaseline > 0
+        return budgetActive || meta?.loadsPerWeekOverride != null
+      }
+
+      // Blank when neither input exists — a 0 here would claim a plan of zero,
+      // which is a real (different) state.
+      const totalPlanGetter = (params: ValueGetterParams<WeeklyPlanWideRow>) => {
+        const baseline = params.data?.[baselineField]
+        const backlog = params.data?.[backlogField]
+        if (baseline == null && backlog == null) return null
+        return toNumber(baseline) + toNumber(backlog)
+      }
 
       // Current-week tint applies to headers (via headerClass) and the pinned
       // totals row only — regular body cells stay uncolored. AG Grid keeps
@@ -140,15 +160,15 @@ const InboundWeeklyPlanGrid = ({
         color: weekEditable ? 'inherit' : READ_ONLY_TEXT
       })
 
-      // Overridden = current value differs from the fetched baseline. Typing
-      // the exact fetched value reads as "no override" — the event still fires
-      // so Retool can decide what that means.
+      // Overridden = a loadsPerWeekOverride exists in the DB (meta is mutated
+      // optimistically on edit, so styling tracks the pending write too).
+      // Never inferred from value diffs — an override that happens to equal
+      // the budget can't exist (it's cleared instead), and reloads must not
+      // reset the styling.
       const baselineCellStyle = (params: CellClassParams<WeeklyPlanWideRow>) => {
-        const baseline = metaFor(params.data)?.baseline
         const overridden =
           !params.node.rowPinned &&
-          baseline != null &&
-          toNumber(params.value) !== baseline
+          metaFor(params.data)?.loadsPerWeekOverride != null
         return editableCellStyle(params, overridden)
       }
 
@@ -166,19 +186,24 @@ const InboundWeeklyPlanGrid = ({
         return Number.isInteger(value) && value >= 0 ? value : undefined
       }
 
+      // Clearing Baseline removes the override: the cell falls back to the
+      // budget in effect (null when there is none — only reachable when
+      // clearing a stray override). Never write the budget value back as an
+      // override — that stores a frozen copy that goes stale when the budget
+      // is revised.
       const baselineParser = (params: ValueParserParams<WeeklyPlanWideRow>) => {
         const parsed = parseNonNegativeInt(params.newValue)
-        if (parsed === undefined) return toNumber(params.oldValue)
+        if (parsed === undefined) return params.oldValue ?? null
         if (parsed !== null) return parsed
-        // Cleared — revert to the fetched baseline when the data provides one,
-        // otherwise keep the previous value (there's nothing to revert to).
-        return metaFor(params.data)?.baseline ?? toNumber(params.oldValue)
+        return metaFor(params.data)?.budgetBaseline ?? null
       }
 
+      // Clearing Backlog means "not entered" (null, blank) — distinct from an
+      // explicit 0.
       const backlogParser = (params: ValueParserParams<WeeklyPlanWideRow>) => {
         const parsed = parseNonNegativeInt(params.newValue)
-        if (parsed === undefined) return toNumber(params.oldValue)
-        return parsed ?? 0
+        if (parsed === undefined) return params.oldValue ?? null
+        return parsed
       }
 
       const children: ColDef<WeeklyPlanWideRow>[] = [
@@ -187,19 +212,26 @@ const InboundWeeklyPlanGrid = ({
           field: baselineField,
           type: 'numericColumn',
           cellDataType: 'number',
-          editable,
+          editable: baselineEditable,
           headerClass,
           cellEditor: 'agNumberCellEditor',
           cellEditorParams: { min: 0, precision: 0 },
           valueParser: baselineParser,
-          cellStyle: baselineCellStyle
+          cellStyle: baselineCellStyle,
+          // Surface the underlying budget when a cell is overridden.
+          tooltipValueGetter: params => {
+            const meta = metaFor(params.data)
+            return !params.node?.rowPinned && meta?.loadsPerWeekOverride != null
+              ? `Override — budget: ${meta.budgetBaseline ?? 'none'}`
+              : null
+          }
         },
         {
           headerName: 'Backlog',
           field: backlogField,
           type: 'numericColumn',
           cellDataType: 'number',
-          editable,
+          editable: backlogEditable,
           headerClass,
           cellEditor: 'agNumberCellEditor',
           cellEditorParams: { min: 0, precision: 0 },
@@ -272,16 +304,56 @@ const InboundWeeklyPlanGrid = ({
     setEditedTotals([buildTotalsRow(liveRows, weeks)])
 
     // Cells the data window never mentioned have no meta — synthesize the key
-    // in the transformer's `${locationId}-${programId}-${effectiveDate}` format.
-    const meta = cellMeta.get(cellMetaKeyFor(data.locationId, data.programId, parsed.weekKey))
+    // in the transformer's `${locationId}-${programId}-${effectiveWeek}` format.
+    const metaKey = cellMetaKeyFor(data.locationId, data.programId, parsed.weekKey)
+    let meta = cellMeta.get(metaKey)
+
+    const newValue = event.newValue == null ? null : toNumber(event.newValue)
+    const previousValue = event.oldValue == null ? null : toNumber(event.oldValue)
+
+    // Resulting DB state for the (location, program, week) row. The save
+    // queries write these two columns directly — and delete the row when
+    // both are null (chk_has_input forbids storing an empty row).
+    let loadsPerWeekOverride = meta?.loadsPerWeekOverride ?? null
+    let loadsInBacklog =
+      (data[cellFieldFor(parsed.weekKey, 'backlog')] as number | null) ?? null
+
+    if (parsed.field === 'baseline') {
+      // A value equal to the budget in effect is no override at all — store
+      // nothing rather than a redundant copy that would go stale when the
+      // budget is revised. Clearing the cell resolves back to the budget
+      // (the parser already handled the display), which also lands here.
+      loadsPerWeekOverride =
+        newValue != null && newValue !== meta?.budgetBaseline ? newValue : null
+
+      // Track the pending write optimistically so override styling stays
+      // correct until the refetch lands.
+      if (meta) {
+        meta.loadsPerWeekOverride = loadsPerWeekOverride
+      } else {
+        meta = {
+          rowKey: `${data.locationId}-${data.programId}-${parsed.weekKey}`,
+          effectiveWeek: `${parsed.weekKey}T00:00:00.000Z`,
+          budgetBaseline: null,
+          loadsPerWeekOverride
+        }
+        cellMeta.set(metaKey, meta)
+      }
+      event.api.refreshCells({ rowNodes: [event.node], columns: [event.column], force: true })
+    } else {
+      loadsInBacklog = newValue
+    }
+
     const editedCell: WeeklyPlanEditedCell = {
       rowKey: meta?.rowKey ?? `${data.locationId}-${data.programId}-${parsed.weekKey}`,
       locationId: data.locationId,
       programId: data.programId,
-      effectiveDate: meta?.effectiveDate ?? `${parsed.weekKey}T00:00:00.000Z`,
+      effectiveWeek: meta?.effectiveWeek ?? `${parsed.weekKey}T00:00:00.000Z`,
       field: parsed.field,
-      previousValue: toNumber(event.oldValue),
-      newValue: toNumber(event.newValue)
+      previousValue,
+      newValue,
+      loadsPerWeekOverride,
+      loadsInBacklog
     }
 
     setLastEditedCell(editedCell as Retool.SerializableObject)

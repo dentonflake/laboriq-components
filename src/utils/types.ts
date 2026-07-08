@@ -163,10 +163,12 @@ export type InboundPlanGridProps = {
 // week). `timezone` rides along on the location object but isn't used (the
 // grid keys weeks off the date part of effectiveDate).
 export type RawWeeklyPlanRow = {
-  id: string                          // `${locationId}-${programId}-${effectiveDate}`
-  effectiveDate: string               // ISO, e.g. '2026-07-06T00:00:00.000Z'
-  baseline: number | null
-  backlog: number | null
+  id: string                          // `${locationId}-${programId}-${effectiveWeek}`
+  effectiveWeek: string               // ISO, e.g. '2026-07-06T00:00:00.000Z' — always a Monday
+  budgetBaseline: number | null       // loadsPerWeek of the budget in effect (null = none)
+  loadsPerWeekOverride: number | null     // weekly override from inboundWeeklyPlans, if any
+  baseline: number | null             // coalesce(loadsPerWeekOverride, budgetBaseline)
+  backlog: number | null              // null = not entered (distinct from an explicit 0)
   totalPlan: number | null
   location: { id: number, name: string, timezone?: string | null } | null
   program: { id: number, name: string, programProfile: string | null } | null
@@ -178,22 +180,28 @@ export type WeeklyPlanWeek = {
 }
 
 // Per (program × week) facts the wide row doesn't carry — original row key,
-// original effectiveDate string, and the fetched baseline used for override
-// styling / clear-to-revert. Keyed by `${programId}|${weekKey}`.
+// original effectiveDate string, and the DB truth for the cell: the budget
+// in effect and any stored override. Override styling and clear semantics
+// key off these, never off value diffs. Keyed by
+// `${locationId}|${programId}|${weekKey}`. `loadsPerWeekOverride` is mutated
+// optimistically on edit so styling stays correct until the next refetch.
 export type WeeklyPlanCellMeta = {
   rowKey: string
-  effectiveDate: string
-  baseline: number | null
+  effectiveWeek: string
+  budgetBaseline: number | null
+  loadsPerWeekOverride: number | null
 }
 
 // Wide row shape for column-group rendering — one row per program with
 // dynamic cell fields keyed by week (e.g. 'wk-2026-06-01_baseline').
+// Cell values are null when there's nothing to show (no budget in effect /
+// backlog not entered) — rendered blank, distinct from 0.
 export type WeeklyPlanWideRow = {
   programId: number
   locationId: number
   location: string
   program: string
-  [cellField: string]: number | string
+  [cellField: string]: number | string | null
 }
 
 export type WeeklyPlanPivotResult = {
@@ -203,14 +211,20 @@ export type WeeklyPlanPivotResult = {
 }
 
 // Payload exposed as `lastEditedCell` state when `cellValueChanged` fires.
+// `newValue: null` means the user cleared the cell. `loadsPerWeekOverride` /
+// `loadsInBacklog` carry the *resulting* row state so the save queries can
+// write both columns directly — and delete the row when both are null
+// (chk_has_input forbids storing an empty row).
 export type WeeklyPlanEditedCell = {
   rowKey: string
   locationId: number
   programId: number
-  effectiveDate: string
+  effectiveWeek: string
   field: 'baseline' | 'backlog'
-  previousValue: number
-  newValue: number
+  previousValue: number | null
+  newValue: number | null
+  loadsPerWeekOverride: number | null
+  loadsInBacklog: number | null
 }
 
 export type InboundWeeklyPlanGridProps = {
