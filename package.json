@@ -16,7 +16,8 @@
   },
   "scripts": {
     "dev": "npx retool-ccl dev",
-    "deploy": "npx retool-ccl deploy"
+    "deploy": "npx retool-ccl deploy",
+    "test": "vitest"
   },
   "browserslist": {
     "production": [
