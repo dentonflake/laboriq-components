@@ -3,6 +3,8 @@ import { Retool } from '@tryretool/custom-component-support'
 import {
   ArrowPathIcon,
   CheckIcon,
+  ChevronDoubleLeftIcon,
+  ChevronDoubleRightIcon,
   ClockIcon,
   LockClosedIcon,
 } from '@heroicons/react/16/solid'
@@ -96,6 +98,9 @@ type EmployeeGroup = {
   indirectSeconds?: number
   adminSeconds?: number
   gapSeconds?: number
+  workPunchSeconds?: number
+  breakPunchSeconds?: number
+  lunchPunchSeconds?: number
   // `{ value, message }` or bare values, resolved like record flags.
   flags?: (FlagInfo | string | number)[]
   // Whether this viewer may reset the employee — decided by the transformer.
@@ -179,7 +184,7 @@ type Row = {
   supervisorName: string | null
   jobTitle: string | null
   timeZone: string
-  totals: { direct: number; indirect: number; admin: number; gap: number }
+  totals: { work: number; direct: number; indirect: number; admin: number; gap: number; breaks: number }
   flags: Flag[]
   canReset: boolean
   isLocked: boolean
@@ -210,7 +215,7 @@ type Hovered =
 
 type Menu = { segment: Segment; row: Row; x: number; top: number; bottom: number }
 
-type SortKey = 'name' | 'start' | 'direct' | 'indirect' | 'admin' | 'gap'
+type SortKey = 'name' | 'flags' | 'start' | 'work' | 'direct' | 'indirect' | 'admin' | 'gap' | 'breaks'
 type SortDirection = 'asc' | 'desc'
 // A start sort remembers which day (wall-clock midnight) its date label was.
 type SortRule = { key: SortKey; direction: SortDirection; day?: number }
@@ -219,16 +224,51 @@ const HOUR_MS = 3600000
 const MINUTE_MS = 60000
 const DAY_MS = 86400000
 const MIN_PX_PER_HOUR = 60
+// Direct–Gap split up the punched work time, so only those four show a share
+// (of their sum). Break/Lunch is break + lunch punches; Work is work punches.
+// `width` is the room each column's text needs at the default size: '11h 24m'
+// takes 48px, and the Break/Lunch header more. Resizing scales them together.
+// `colorOf` names the definition whose text color the total wears — Break/Lunch
+// and Work are punch time, so they wear the Punch type's.
+const TOTAL_COLUMNS = [
+  { key: 'direct', label: 'Direct', hasShare: true, width: 48, colorOf: { jobType: '1' } },
+  { key: 'indirect', label: 'Indirect', hasShare: true, width: 48, colorOf: { jobType: '2' } },
+  { key: 'admin', label: 'Admin', hasShare: true, width: 48, colorOf: { jobType: '3' } },
+  { key: 'gap', label: 'Gap', hasShare: true, width: 48, colorOf: { type: 'Gap' } },
+  { key: 'breaks', label: 'Break/Lunch', hasShare: false, width: 64, colorOf: { type: 'Punch' } },
+  { key: 'work', label: 'Work', hasShare: false, width: 48, colorOf: { type: 'Punch' } },
+] as const
+
+type TotalKey = typeof TOTAL_COLUMNS[number]['key']
+// Space left of every column's text, so right-aligned values never run into
+// the column before them.
+const TOTAL_GAP = 12
 // Name and totals columns are resizable by dragging their inner edge; these
 // are the defaults (restored by double-clicking a handle) and the limits.
 const DEFAULT_NAME_WIDTH = 240
 const MIN_NAME_WIDTH = 160
 const MAX_NAME_WIDTH = 480
 const TOTALS_PADDING = 16
-const DEFAULT_TOTALS_WIDTH = 64 * 4 + TOTALS_PADDING
-const MIN_TOTALS_WIDTH = 48 * 4 + TOTALS_PADDING
+const TOTAL_COLUMNS_WIDTH = TOTAL_COLUMNS.reduce((sum, column) => sum + column.width + TOTAL_GAP, 0)
+const DEFAULT_TOTALS_WIDTH = TOTAL_COLUMNS_WIDTH + TOTALS_PADDING
+const MIN_TOTALS_WIDTH = Math.round(TOTAL_COLUMNS_WIDTH * 0.8) + TOTALS_PADDING
 const MAX_TOTALS_WIDTH = 480
+// Collapsed, the totals shrink to a strip just wide enough for the expand and
+// refresh buttons.
+const COLLAPSED_TOTALS_WIDTH = 28
 const RESIZE_HANDLE_WIDTH = 7
+// Name line: cell padding, then the chevron and its gap. The sub-line, the
+// Employee header and the footer count all indent to where the name starts.
+const CELL_PADDING = 8
+const CHEVRON_WIDTH = 8
+const NAME_GAP = 4
+const NAME_INDENT = CHEVRON_WIDTH + NAME_GAP
+const NAME_LINE_HEIGHT = 16
+// The flags column fits the most icons any shown employee has, and hides
+// when nobody has a flag.
+const FLAG_ICON_WIDTH = 16
+const FLAG_GAP = 4
+const MIN_FLAGS_WIDTH = 56
 const LANE_LABEL_WIDTH = 56
 const ROW_HEIGHT = 44
 const ROW_PADDING = 6
@@ -271,22 +311,18 @@ const MAX_WHEEL_DELTA = 40
 const LANES: Lane[] = ['Shift', 'Punch', 'Activity']
 const TICK_STEPS_MINUTES = [1, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440]
 const JOB_TYPES: Record<string, string> = { 1: 'Direct', 2: 'Indirect', 3: 'Admin' }
-const TOTAL_COLUMNS = [
-  { key: 'direct', label: 'Direct' },
-  { key: 'indirect', label: 'Indirect' },
-  { key: 'admin', label: 'Admin' },
-  { key: 'gap', label: 'Gap' },
-] as const
-
 // Names read A→Z first; totals read largest first, since the point of sorting
 // by them is to surface who has the most.
 const DEFAULT_DIRECTION: Record<SortKey, SortDirection> = {
   name: 'asc',
+  flags: 'desc',
   start: 'asc',
+  work: 'desc',
   direct: 'desc',
   indirect: 'desc',
   admin: 'desc',
   gap: 'desc',
+  breaks: 'desc',
 }
 const TODAY_COLOR = '#2680C2'
 
@@ -622,10 +658,12 @@ const toRow = (group: EmployeeGroup, lookups: Lookups): Row => {
     // employee's home location only covers a row whose records have none.
     timeZone: records.map(zoneOf).find(Boolean) ?? group.timezone ?? group.location?.timezone ?? 'UTC',
     totals: {
+      work: group.workPunchSeconds ?? 0,
       direct: group.directSeconds ?? 0,
       indirect: group.indirectSeconds ?? 0,
       admin: group.adminSeconds ?? 0,
       gap: group.gapSeconds ?? 0,
+      breaks: (group.breakPunchSeconds ?? 0) + (group.lunchPunchSeconds ?? 0),
     },
     flags,
     canReset: group.canReset === true,
@@ -773,6 +811,7 @@ const compareRows = (rules: SortRule[], firstOf: Map<string, FirstRecord>) => (a
   const orderBy = (rule: SortRule) => {
     const sign = rule.direction === 'asc' ? 1 : -1
     if (rule.key === 'name') return sign * a.name.localeCompare(b.name)
+    if (rule.key === 'flags') return sign * (a.flags.length - b.flags.length)
     if (rule.key === 'start') {
       const first = firstOf.get(a.key)
       const second = firstOf.get(b.key)
@@ -858,6 +897,15 @@ export const LaborTimelines = () => {
     }
   }, [lookupsKey])
 
+  // Job types without colors fall back to the default Assignment green, the
+  // same as their bars.
+  const totalColors = useMemo(() => Object.fromEntries(TOTAL_COLUMNS.map((column) => [
+    column.key,
+    'jobType' in column.colorOf
+      ? colorsOf(lookups.jobTypes.get(column.colorOf.jobType), 'Assignment').text
+      : colorsOf(lookups.types.get(column.colorOf.type), column.colorOf.type).text,
+  ])) as Record<TotalKey, string>, [lookups])
+
   const employeesKey = JSON.stringify(employees)
   // A cleared or still-loading binding arrives as '' rather than [].
   const rows = useMemo(() => (
@@ -913,6 +961,7 @@ export const LaborTimelines = () => {
   return (
     <Chart
       rows={rows}
+      totalColors={totalColors}
       isLoading={isLoading}
       onToolPick={onToolPick}
       onReset={onResetEmployee}
@@ -931,13 +980,14 @@ const LoadingBar = ({ style }: { style?: CSSProperties }) => (
 
 type ChartProps = {
   rows: Row[]
+  totalColors: Record<TotalKey, string>
   isLoading: boolean
   onToolPick: (log: Retool.SerializableObject) => void
   onReset: (employee: Retool.SerializableObject) => void
   onRefresh: () => void
 }
 
-const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) => {
+const Chart = ({ rows, totalColors, isLoading, onToolPick, onReset, onRefresh }: ChartProps) => {
   const hasOpenSegment = useMemo(
     () => rows.some((row) => row.segments.some((segment) => segment.endMs === null)),
     [rows],
@@ -956,12 +1006,20 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
   const [columns, setColumns] = useState({ name: DEFAULT_NAME_WIDTH, totals: DEFAULT_TOTALS_WIDTH })
   const [resize, setResize] = useState<{ column: 'name' | 'totals'; startX: number; startWidth: number } | null>(null)
   const [hoveredHandle, setHoveredHandle] = useState<'name' | 'totals' | null>(null)
+  const [isTotalsCollapsed, setIsTotalsCollapsed] = useState(false)
   const nameWidth = columns.name
-  const totalsWidth = columns.totals
-  const totalColumnWidth = (totalsWidth - TOTALS_PADDING) / TOTAL_COLUMNS.length
+  const totalsWidth = isTotalsCollapsed ? COLLAPSED_TOTALS_WIDTH : columns.totals
+  const totalColumnWidth = (column: typeof TOTAL_COLUMNS[number]) =>
+    ((column.width + TOTAL_GAP) / TOTAL_COLUMNS_WIDTH) * (totalsWidth - TOTALS_PADDING)
+  const maxFlags = useMemo(() => rows.reduce((most, row) => Math.max(most, row.flags.length), 0), [rows])
+  const flagsWidth = maxFlags === 0
+    ? 0
+    : Math.max(MIN_FLAGS_WIDTH, CELL_PADDING * 2 + maxFlags * FLAG_ICON_WIDTH + (maxFlags - 1) * FLAG_GAP)
+  // Everything pinned left of the timeline: the name column, then flags.
+  const leftWidth = nameWidth + flagsWidth
   // The native wheel listener registers once, so it reads the width from a ref.
-  const nameWidthRef = useRef(nameWidth)
-  nameWidthRef.current = nameWidth
+  const leftWidthRef = useRef(leftWidth)
+  leftWidthRef.current = leftWidth
 
   useEffect(() => {
     if (!resize) return
@@ -1114,7 +1172,7 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
   }, [shown, wallNow])
 
   const dataHours = (domain.end - domain.start) / HOUR_MS
-  const available = Math.max(Math.floor(viewport.width - nameWidth - totalsWidth), MIN_PX_PER_HOUR)
+  const available = Math.max(Math.floor(viewport.width - leftWidth - totalsWidth), MIN_PX_PER_HOUR)
   // Zoom 1 fits the whole range to the width when it fits, otherwise falls
   // back to a fixed scale and scrolls.
   const basePxPerHour = Math.max(MIN_PX_PER_HOUR, available / dataHours)
@@ -1214,7 +1272,7 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
       const delta = Math.max(-MAX_WHEEL_DELTA, Math.min(MAX_WHEEL_DELTA, event.deltaY))
       const nextZoom = clampZoom(current.zoom * Math.exp(-delta * ZOOM_SENSITIVITY), current.minZoom)
       if (nextZoom === current.zoom) return
-      const trackOffset = event.clientX - node.getBoundingClientRect().left - nameWidthRef.current
+      const trackOffset = event.clientX - node.getBoundingClientRect().left - leftWidthRef.current
       const { frame: from } = current
       const anchorMs = from.start + ((node.scrollLeft + trackOffset) / from.pxPerHour) * HOUR_MS
       const to = frameFor(current.domain, current.available, current.basePxPerHour, nextZoom)
@@ -1226,7 +1284,7 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
   }, [])
 
   const trackWidth = spanHours * pxPerHour
-  const contentWidth = nameWidth + trackWidth + totalsWidth
+  const contentWidth = leftWidth + trackWidth + totalsWidth
 
   // Pointer x → track x. Returns null when the pointer is over the pinned
   // name or totals column, which overlay the track while scrolled.
@@ -1234,9 +1292,9 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
     const node = scrollRef.current
     if (!node) return null
     const viewportX = clientX - node.getBoundingClientRect().left
-    const inTrack = viewportX >= nameWidth && viewportX <= node.clientWidth - totalsWidth
+    const inTrack = viewportX >= leftWidth && viewportX <= node.clientWidth - totalsWidth
     if (!inTrack && !clamp) return null
-    const x = node.scrollLeft + viewportX - nameWidth
+    const x = node.scrollLeft + viewportX - leftWidth
     return Math.max(0, Math.min(x, trackWidth))
   }
 
@@ -1357,10 +1415,11 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
         // Date labels sit on the axis, where mousedown starts a drag-zoom.
         onMouseDown={(event) => event.stopPropagation()}
         onClick={(event) => setSort((previous) => nextSort(previous, key, event.shiftKey, day))}
-        title="Click to sort, shift-click to add a sort"
-        style={{ ...sortHeaderStyle, ...style, color: rule ? '#243B53' : '#627D98' }}
+        // A truncated label is still readable in full on hover.
+        title={`${typeof label === 'string' ? `${label} \u2014 ` : ''}Click to sort, shift-click to add a sort`}
+        style={{ ...sortHeaderStyle, ...style, color: rule ? '#243B53' : style.color ?? '#829AB1' }}
       >
-        {label}
+        <span style={sortLabelStyle}>{label}</span>
         {rule && (
           <span style={sortMarkStyle}>
             {rule.direction === 'asc' ? '\u25B2' : '\u25BC'}
@@ -1495,7 +1554,7 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
   const handles = [
     { column: 'name' as const, left: nameWidth - RESIZE_HANDLE_WIDTH / 2 },
     { column: 'totals' as const, left: viewport.width - totalsWidth - RESIZE_HANDLE_WIDTH / 2 },
-  ]
+  ].filter(({ column }) => column !== 'totals' || !isTotalsCollapsed)
 
   return (
     <div style={{ ...frameStyle, userSelect: resize ? 'none' : undefined, cursor: resize ? 'col-resize' : undefined }}>
@@ -1514,7 +1573,7 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
         <div style={{ ...contentStyle, width: contentWidth }}>
           <div style={{ ...headerStyle, width: contentWidth }}>
             <div style={{ ...stickyLeftStyle, ...cornerStyle, width: nameWidth }}>
-              {sortHeader('name', 'Employee', { paddingLeft: 14, height: DAY_BAND })}
+              {sortHeader('name', 'Employee', { paddingLeft: NAME_INDENT, height: DAY_BAND })}
               <label style={{ ...expandAllStyle, opacity: expandable.size > 0 ? 1 : 0.4 }}>
                 <button
                   type="button"
@@ -1529,6 +1588,11 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
                 Expand all
               </label>
             </div>
+            {flagsWidth > 0 && (
+              <div style={{ ...stickyLeftStyle, ...flagsHeaderStyle, left: nameWidth, width: flagsWidth }}>
+                {sortHeader('flags', 'Flags', { height: DAY_BAND })}
+              </div>
+            )}
             <div
               onMouseDown={onBodyMouseDown}
               style={{ position: 'relative', width: trackWidth, height: AXIS_HEIGHT, cursor: 'crosshair', userSelect: 'none' }}
@@ -1549,21 +1613,43 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
                 </div>
               ))}
             </div>
-            <div style={{ ...stickyRightStyle, ...totalsHeaderStyle, width: totalsWidth }}>
-              {TOTAL_COLUMNS.map((column) => sortHeader(column.key, column.label, {
-                ...totalCellStyle,
-                width: totalColumnWidth,
-                justifyContent: 'flex-end',
-                height: DAY_BAND,
-              }))}
-            </div>
+            {isTotalsCollapsed ? (
+              <div style={{ ...stickyRightStyle, ...totalsHeaderStyle, ...collapsedTotalsStyle, width: totalsWidth }}>
+                <button
+                  type="button"
+                  title="Show totals"
+                  onClick={() => setIsTotalsCollapsed(false)}
+                  style={collapseToggleStyle}
+                >
+                  <ChevronDoubleLeftIcon style={collapseIconStyle} />
+                </button>
+              </div>
+            ) : (
+              <div style={{ ...stickyRightStyle, ...totalsHeaderStyle, width: totalsWidth }}>
+                <button
+                  type="button"
+                  title="Hide totals"
+                  onClick={() => setIsTotalsCollapsed(true)}
+                  // Sits in the padding and gap before Direct's label, above its click area.
+                  style={{ ...collapseToggleStyle, position: 'absolute', left: 4, top: 0, zIndex: 1 }}
+                >
+                  <ChevronDoubleRightIcon style={collapseIconStyle} />
+                </button>
+                {TOTAL_COLUMNS.map((column) => sortHeader(column.key, column.label, {
+                  ...totalCellStyle,
+                  width: totalColumnWidth(column),
+                  justifyContent: 'flex-end',
+                  height: DAY_BAND,
+                }))}
+              </div>
+            )}
           </div>
 
           <div
             onMouseDown={onBodyMouseDown}
             style={{ position: 'relative', height: bodyHeight, cursor: 'crosshair', userSelect: 'none' }}
           >
-            <div style={{ position: 'absolute', top: 0, left: nameWidth, width: trackWidth, height: bodyHeight, pointerEvents: 'none' }}>
+            <div style={{ position: 'absolute', top: 0, left: leftWidth, width: trackWidth, height: bodyHeight, pointerEvents: 'none' }}>
               {gridTicks.filter((tick) => isDrawnX(xOf(tick))).map((tick) => (
                 <div
                   key={`grid-${tick}`}
@@ -1599,20 +1685,6 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
                         <span style={chevronStyle}>{expandable.has(row.key) && (lanes ? '▾' : '▸')}</span>
                         <span style={nameTextStyle}>{row.name}</span>
                         <span style={pillStyle}>{row.cargoId}</span>
-                        {row.flags.length > 0 && (
-                          <span
-                            onMouseEnter={hoverFlags(row)}
-                            onMouseMove={hoverFlags(row)}
-                            onMouseLeave={() => setHovered(null)}
-                            style={employeeFlagsStyle}
-                          >
-                            {row.flags.map((flag, flagIndex) => (
-                              <span key={`${flag.id}-${flagIndex}`} style={{ color: flag.color }}>
-                                {flag.icon ?? '\u26a0'}
-                              </span>
-                            ))}
-                          </span>
-                        )}
                         {row.canReset && (
                           <button
                             type="button"
@@ -1645,6 +1717,35 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
                     )}
                   </div>
 
+                  {flagsWidth > 0 && (
+                    <div
+                      onMouseDown={(event) => event.stopPropagation()}
+                      style={{
+                        ...stickyLeftStyle,
+                        ...flagsCellStyle,
+                        left: nameWidth,
+                        width: flagsWidth,
+                        alignItems: lanes ? 'flex-start' : 'center',
+                        paddingTop: lanes ? ROW_PADDING + 2 : 0,
+                      }}
+                    >
+                      {row.flags.length > 0 && (
+                        <div
+                          onMouseEnter={hoverFlags(row)}
+                          onMouseMove={hoverFlags(row)}
+                          onMouseLeave={() => setHovered(null)}
+                          style={employeeFlagsStyle}
+                        >
+                          {row.flags.map((flag, flagIndex) => (
+                            <span key={`${flag.id}-${flagIndex}`} style={{ ...flagIconStyle, color: flag.color }}>
+                              {flag.icon ?? '\u26A0'}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <div style={{ position: 'relative', width: trackWidth, height: '100%', flex: '0 0 auto' }}>
                     {lanes ? renderExpanded(row, lanes) : renderCompact(row)}
                     {nowVisible && <div style={{ ...nowTickStyle, left: xOf(rowNow) }} />}
@@ -1660,16 +1761,17 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
                       paddingTop: lanes ? ROW_PADDING + 2 : 0,
                     }}
                   >
-                    {TOTAL_COLUMNS.map((column) => {
+                    {!isTotalsCollapsed && TOTAL_COLUMNS.map((column) => {
                       const seconds = row.totals[column.key]
                       const sum = row.totals.direct + row.totals.indirect + row.totals.admin + row.totals.gap
                       return (
                         <div
                           key={column.key}
-                          style={{ ...totalCellStyle, width: totalColumnWidth, color: seconds > 0 ? '#334E68' : '#BCCCDC' }}
+                          style={{ ...totalCellStyle, width: totalColumnWidth(column), color: seconds > 0 ? totalColors[column.key] : '#BCCCDC' }}
                         >
                           <div>{formatTotal(seconds)}</div>
-                          <div style={shareStyle}>{formatShare(seconds, sum)}</div>
+                          {/* A blank line keeps every column's hours on the same baseline. */}
+                          <div style={shareStyle}>{column.hasShare ? formatShare(seconds, sum) : '\u00A0'}</div>
                         </div>
                       )
                     })}
@@ -1679,7 +1781,7 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
             })}
 
             {selection && selection.width > 0 && (
-              <div style={{ ...selectionStyle, left: nameWidth + selection.left, width: selection.width, height: bodyHeight }} />
+              <div style={{ ...selectionStyle, left: leftWidth + selection.left, width: selection.width, height: bodyHeight }} />
             )}
           </div>
 
@@ -1689,8 +1791,18 @@ const Chart = ({ rows, isLoading, onToolPick, onReset, onRefresh }: ChartProps) 
             <div style={{ ...stickyLeftStyle, ...footerCountStyle, width: nameWidth }}>
               {shown.length} {shown.length === 1 ? 'employee' : 'employees'}
             </div>
+            {flagsWidth > 0 && (
+              <div style={{ ...stickyLeftStyle, ...footerFlagsStyle, left: nameWidth, width: flagsWidth }} />
+            )}
             <div style={{ flex: '0 0 auto', width: trackWidth }} />
-            <div style={{ ...stickyRightStyle, ...footerActionsStyle, width: totalsWidth }}>
+            <div
+              style={{
+                ...stickyRightStyle,
+                ...footerActionsStyle,
+                ...(isTotalsCollapsed ? collapsedTotalsStyle : {}),
+                width: totalsWidth,
+              }}
+            >
               <button
                 type="button"
                 title="Refresh"
@@ -1891,7 +2003,10 @@ const emptyStyle: CSSProperties = {
   fontFamily: 'Inter, system-ui, sans-serif',
   fontSize: 11,
   color: '#9FB3C8',
-  padding: 8,
+  height: '100%',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
 }
 
 const contentStyle: CSSProperties = {
@@ -1916,18 +2031,49 @@ const footerStyle: CSSProperties = {
 const footerCountStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  // Lines up with the employee names: cell padding + chevron + gap.
-  paddingLeft: 22,
-  color: '#627D98',
-  fontWeight: 600,
+  // Lines up with the employee names.
+  paddingLeft: CELL_PADDING + NAME_INDENT,
+  color: '#829AB1',
+  fontWeight: 500,
   borderRight: '1px solid #E4E7EB',
 }
 
 const footerActionsStyle: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'flex-end',
-  paddingRight: 8,
+  // The button's own inset makes up the difference, so the icon's edge lines
+  // up with the totals above it.
+  paddingRight: CELL_PADDING - 4,
   borderLeft: '1px solid #E4E7EB',
+}
+
+const footerFlagsStyle: CSSProperties = {
+  borderRight: '1px solid #E4E7EB',
+}
+
+const collapsedTotalsStyle: CSSProperties = {
+  justifyContent: 'center',
+  paddingLeft: 0,
+  paddingRight: 0,
+}
+
+const collapseToggleStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 16,
+  height: DAY_BAND,
+  padding: 0,
+  border: 'none',
+  borderRadius: 4,
+  background: 'transparent',
+  color: '#9FB3C8',
+  cursor: 'pointer',
+}
+
+const collapseIconStyle: CSSProperties = {
+  width: 12,
+  height: 12,
 }
 
 const refreshStyle: CSSProperties = {
@@ -1976,8 +2122,8 @@ const stickyRightStyle: CSSProperties = {
   background: '#FFFFFF',
   boxSizing: 'border-box',
   display: 'flex',
-  paddingLeft: 8,
-  paddingRight: 8,
+  paddingLeft: CELL_PADDING,
+  paddingRight: CELL_PADDING,
 }
 
 // No fixed height: globals.css makes everything border-box, so the header's
@@ -1988,22 +2134,39 @@ const cornerStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
   justifyContent: 'space-between',
-  paddingLeft: 8,
-  paddingRight: 8,
+  paddingLeft: CELL_PADDING,
+  paddingRight: CELL_PADDING,
+  borderRight: '1px solid #E4E7EB',
+}
+
+const flagsHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  paddingLeft: CELL_PADDING,
+  paddingRight: CELL_PADDING,
   borderRight: '1px solid #E4E7EB',
 }
 
 const sortHeaderStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 3,
-  fontWeight: 600,
+  gap: 4,
+  fontWeight: 500,
   cursor: 'pointer',
   whiteSpace: 'nowrap',
 }
 
+// Shrinks to an ellipsis when a header is wider than its column; the arrow
+// never shrinks, so the active sort stays visible.
+const sortLabelStyle: CSSProperties = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
 const sortMarkStyle: CSSProperties = {
-  fontSize: 7,
+  flex: '0 0 auto',
+  fontSize: 8,
   lineHeight: 1,
   display: 'inline-flex',
   alignItems: 'flex-start',
@@ -2011,17 +2174,17 @@ const sortMarkStyle: CSSProperties = {
 
 const sortIndexStyle: CSSProperties = {
   fontSize: 8,
-  marginLeft: 1,
+  marginLeft: 2,
 }
 
 const expandAllStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   height: DAY_BAND,
-  gap: 5,
-  color: '#627D98',
+  gap: 4,
+  color: '#829AB1',
   fontSize: 11,
-  fontWeight: 600,
+  fontWeight: 500,
   whiteSpace: 'nowrap',
   cursor: 'pointer',
 }
@@ -2059,8 +2222,6 @@ const todayDotStyle: CSSProperties = {
 
 const totalsHeaderStyle: CSSProperties = {
   alignItems: 'flex-start',
-  color: '#627D98',
-  fontWeight: 600,
   borderLeft: '1px solid #E4E7EB',
 }
 
@@ -2070,6 +2231,8 @@ const totalsCellStyle: CSSProperties = {
 }
 
 const totalCellStyle: CSSProperties = {
+  paddingLeft: TOTAL_GAP,
+  boxSizing: 'border-box',
   textAlign: 'right',
   whiteSpace: 'nowrap',
 }
@@ -2085,8 +2248,16 @@ const rowStyle: CSSProperties = {
 const nameCellStyle: CSSProperties = {
   display: 'flex',
   height: '100%',
-  paddingLeft: 8,
+  paddingLeft: CELL_PADDING,
   cursor: 'pointer',
+  borderRight: '1px solid #E4E7EB',
+}
+
+const flagsCellStyle: CSSProperties = {
+  display: 'flex',
+  height: '100%',
+  paddingLeft: CELL_PADDING,
+  paddingRight: CELL_PADDING,
   borderRight: '1px solid #E4E7EB',
 }
 
@@ -2101,15 +2272,16 @@ const nameBlockStyle: CSSProperties = {
 const nameLineStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 6,
+  gap: NAME_GAP,
+  height: NAME_LINE_HEIGHT,
   minWidth: 0,
 }
 
 const chevronStyle: CSSProperties = {
   flex: '0 0 auto',
-  width: 8,
+  width: CHEVRON_WIDTH,
   color: '#9FB3C8',
-  fontSize: 9,
+  fontSize: 10,
 }
 
 const nameTextStyle: CSSProperties = {
@@ -2132,7 +2304,7 @@ const pillStyle: CSSProperties = {
 }
 
 const subLineStyle: CSSProperties = {
-  paddingLeft: 14,
+  paddingLeft: NAME_INDENT,
   color: '#829AB1',
   whiteSpace: 'nowrap',
   overflow: 'hidden',
@@ -2141,7 +2313,7 @@ const subLineStyle: CSSProperties = {
 
 const laneLabelStyle: CSSProperties = {
   position: 'absolute',
-  right: 8,
+  right: CELL_PADDING,
   display: 'flex',
   alignItems: 'center',
   color: '#9FB3C8',
@@ -2152,9 +2324,8 @@ const dayLabelStyle: CSSProperties = {
   position: 'absolute',
   top: 0,
   height: DAY_BAND,
-  paddingLeft: 3,
+  paddingLeft: 4,
   color: '#486581',
-  fontWeight: 600,
   whiteSpace: 'nowrap',
 }
 
@@ -2162,8 +2333,9 @@ const hourLabelStyle: CSSProperties = {
   position: 'absolute',
   top: DAY_BAND,
   height: HOUR_BAND,
-  paddingLeft: 3,
+  paddingLeft: 4,
   color: '#9FB3C8',
+  fontSize: 10,
   whiteSpace: 'nowrap',
 }
 
@@ -2202,7 +2374,7 @@ const backfillBadgeStyle: CSSProperties = {
 const tooltipBadgeLineStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 5,
+  gap: 4,
   color: BACKFILL_COLOR,
 }
 
@@ -2257,7 +2429,7 @@ const menuItemStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 8,
-  padding: '5px 10px 5px 6px',
+  padding: '6px 8px',
   border: 'none',
   borderRadius: 4,
   background: 'transparent',
@@ -2272,7 +2444,7 @@ const menuNoteStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 8,
-  padding: '4px 10px 6px 6px',
+  padding: '4px 8px 6px',
   marginBottom: 2,
   borderBottom: '1px solid #F0F4F8',
   color: '#9FB3C8',
@@ -2291,18 +2463,23 @@ const resetStyle: CSSProperties = {
   border: 'none',
   borderRadius: 4,
   background: 'transparent',
-  color: '#627D98',
+  color: FLAG_COLOR,
   cursor: 'pointer',
 }
 
 const employeeFlagsStyle: CSSProperties = {
-  flex: '0 0 auto',
   display: 'flex',
   alignItems: 'center',
-  gap: 2,
-  fontSize: 11,
+  gap: FLAG_GAP,
+  height: NAME_LINE_HEIGHT,
+  fontSize: 12,
   lineHeight: 1,
   cursor: 'default',
+}
+
+const flagIconStyle: CSSProperties = {
+  width: FLAG_ICON_WIDTH,
+  textAlign: 'center',
 }
 
 const resetIconStyle: CSSProperties = {
@@ -2329,7 +2506,7 @@ const tooltipStyle: CSSProperties = {
   background: '#FFFFFF',
   border: '1px solid #E4E7EB',
   borderRadius: 4,
-  padding: '6px 8px',
+  padding: '8px 12px',
   lineHeight: 1.5,
   color: '#334E68',
   whiteSpace: 'nowrap',
