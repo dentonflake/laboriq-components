@@ -9,3 +9,4 @@ export { InboundWeeklyPlan } from "./components/inbound-weekly-plan";
 export { WeeklyLoadDistribution } from "./components/weekly-load-distribution";
 export { FloorStaffing } from "./components/floor-staffing";
 export { LaborTimeline } from "./components/labor-timeline";
+export { LaborTimelines } from "./components/labor-timelines";
