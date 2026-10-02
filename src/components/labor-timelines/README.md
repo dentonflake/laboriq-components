@@ -115,7 +115,9 @@ Employee        Expand all  │ Flags │ Mon Sep 21                     │ Dir
   overlapping records split into sub-rows. Any number can be open; expansion
   survives filter changes (keyed by `cargoId`).
 - **Pinned** — the axis sticks to the top, names and flags to the left,
-  totals to the right. Horizontal scroll and zoom are shared by every row.
+  totals to the right. Each date label (or employee label in Days view)
+  sticks to the left edge of the timeline while its day is in view, so
+  zooming into the middle of a day keeps it readable. Horizontal scroll and zoom are shared by every row.
 - **Resizable columns** — drag the inner edge of the name or totals column
   (a line appears on hover). Names run 160–480px, totals 317–480px (392 by
   default) with the six total columns scaling together — Break/Lunch a little
@@ -148,6 +150,40 @@ Employee        Expand all  │ Flags │ Mon Sep 21                     │ Dir
   Each total's hours wear its type's text color — Direct, Indirect and Admin
   from *Job types* (`1`, `2`, `3`), Gap from the `Gap` type, Break/Lunch and
   Work from the `Punch` type. Zero stays grey, and the share line stays grey.
+
+## Days view
+
+The **Employees | Days** toggle in the footer turns the chart around. In
+*Employees*, each row is an employee and their days sit side by side across
+the timeline. In *Days*, each row is a day and the employees sit side by side
+— every employee gets a 12a–12a block, labelled in the top band where the
+dates usually are. Zoom, scroll, drag-to-zoom, expand, totals and tooltips all
+work exactly the same. Everything happens in the component; there's nothing
+extra to bind.
+
+```
+Day         │ Aaron Humphries 4277 ⚠️⏱️ ↻   │ Adam Vega 6868 ⏱️             │ Direct …
+            │ 12a   6a   12p   6p           │ 12a   6a   12p   6p           │
+Mon Sep 21  │      [▓▓▓▓▓▓▓]                │     [▓▓▓▓▓▓▓]                 │ 9h 47m
+Tue Sep 22  │      [▓▓▓▓▓▓]                 │      [▓▓▓▓▓▓]                 │ 9h 11m
+Wed Sep 23  │                               │     [▓▓▓▓▓]                   │ 4h 02m
+```
+
+- **Days** — the *Range start*–*Range end* days when bound (days off stay as
+  empty rows), otherwise every day any record touches. Today gets the blue
+  dot, and a "now" tick in each employee's block.
+- **Employees** — blocks run across in name order. Each label has the name,
+  cargo ID, flags (hover for details) and reset (still the whole range);
+  labels truncate when zoomed out too far to fit.
+- **Midnight** — a record that crosses midnight is cut into one piece per day,
+  with square dashed edges where it continues. Its tooltip ("Aaron Humphries
+  · Mon Sep 21"), and the `selectedLog` its tools send, describe the whole
+  record and its employee.
+- **Totals** — each day's totals add up that day's pieces across the
+  employees shown, so with one employee they're that employee's day, and they
+  follow the filters.
+- **Sort** — *Day* orders by date; the totals sort the days.
+- Switching views resets the zoom to fit, since the axes differ.
 
 ## Wall-clock alignment
 

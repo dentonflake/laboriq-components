@@ -165,6 +165,17 @@ type Segment = {
   // 6a in Phoenix and 6a in Los Angeles land on the same x.
   wallStartMs: number
   wallEndMs: number | null
+  // Added to wall time to place the segment: zero normally; on a day row it
+  // moves the day back onto the shared 12a–12a axis.
+  wallShiftMs: number
+  // The whole record, when this segment is one day's piece of it.
+  fullStartMs: number
+  fullEndMs: number | null
+  // Which edges were cut at midnight — the bar continues on the next row.
+  cutStart: boolean
+  cutEnd: boolean
+  // On a day row, the employee this piece belongs to; null on employee rows.
+  owner: Row | null
   isEditable: boolean
   isLocked: boolean
   // An assignment that filled a gap after the fact (from the transformer).
@@ -180,9 +191,13 @@ type Segment = {
 
 type Row = {
   key: string
+  // A day row's midnight on the wall-clock axis; null on employee rows.
+  day: number | null
   cargoId: string
   sourceCargoId: string | number
+  // The row label — the employee, or the date on a day row.
   name: string
+  employeeName: string
   supervisorName: string | null
   jobTitle: string | null
   timeZone: string
@@ -286,8 +301,6 @@ const OVERSCAN_PX = 400
 const SCROLL_STEP_PX = 200
 const MIN_LABEL_WIDTH = 40
 const MIN_TICK_GAP = 60
-// Room the pinned left-edge date label needs before the next midnight's label.
-const DAY_LABEL_GAP = 110
 // Zoomed far out, date labels step through these day counts — the smallest
 // that keeps labels MIN_DAY_LABEL_SPACING apart — like the hour ticks do.
 const DAY_LABEL_STEPS = [1, 2, 3, 7, 14, 28]
@@ -637,6 +650,12 @@ const toSegments = (records: RecordRow[], lookups: Lookups) =>
       endMs,
       wallStartMs: toWall(startMs, timeZone),
       wallEndMs: endMs === null ? null : toWall(endMs, timeZone),
+      wallShiftMs: 0,
+      fullStartMs: startMs,
+      fullEndMs: endMs,
+      cutStart: false,
+      cutEnd: false,
+      owner: null,
       isEditable: record.isEditable === true || Number(record.isEditable) === 1,
       isLocked: flags.some((flag) => flag.id === LOCKED_FLAG),
       isCorrected: record.isCorrected === true,
@@ -656,11 +675,14 @@ const toRow = (group: EmployeeGroup, lookups: Lookups): Row => {
   const cargoId = String(group.cargoId)
   const flags = (group.flags ?? []).map((flag) => toFlag(flag, lookups.flags))
   const segments = toSegments(records, lookups)
+  const employeeName = group.name ?? group.employee?.name ?? `#${cargoId}`
   return {
     key: cargoId,
+    day: null,
     cargoId,
     sourceCargoId: group.cargoId,
-    name: group.name ?? group.employee?.name ?? `#${cargoId}`,
+    name: employeeName,
+    employeeName,
     supervisorName: group.supervisorName ?? group.supervisor?.name ?? null,
     jobTitle: group.jobTitle ?? group.employee?.jobTitle ?? null,
     // The row's zone (for its now tick) follows where the work happened; the
@@ -682,15 +704,104 @@ const toRow = (group: EmployeeGroup, lookups: Lookups): Row => {
   }
 }
 
+/* =========================================================================
+   Days view: the Employees view turned around. Each row is a day, and across
+   the timeline every employee's 12a–12a sits side by side — employee i spans
+   hours 24·i to 24·(i+1) — the way an employee's days sit side by side. Records
+   are cut at their own local midnight; each piece keeps the whole record
+   (fullStartMs/fullEndMs) for tooltips and tools, and its owner. A day's totals
+   are added up from its pieces, so they follow the filters.
+   ========================================================================= */
+
+const wallEndAt = (segment: Segment, now: number) => segment.wallEndMs ?? toWall(now, segment.timeZone)
+
+// The calendar days on the wall-clock axis: the bound range, otherwise every
+// day any record touches.
+const daysOf = (rows: Row[], range: Span | null, now: number) => {
+  let first = range?.start ?? Infinity
+  let last = range ? range.end - DAY_MS : -Infinity
+  if (!range) rows.forEach((row) => row.segments.forEach((segment) => {
+    first = Math.min(first, Math.floor(segment.wallStartMs / DAY_MS) * DAY_MS)
+    last = Math.max(last, Math.ceil(wallEndAt(segment, now) / DAY_MS) * DAY_MS - DAY_MS)
+  }))
+  if (first > last) return []
+  return Array.from({ length: Math.round((last - first) / DAY_MS) + 1 }, (_, index) => first + index * DAY_MS)
+}
+
+// One day's piece of a segment, moved into its owner's block (`blockMs`).
+const pieceOf = (segment: Segment, day: number, blockMs: number, now: number): Segment | null => {
+  const wallEnd = wallEndAt(segment, now)
+  const from = Math.max(segment.wallStartMs, day)
+  const to = Math.min(wallEnd, day + DAY_MS)
+  if (to <= from) return null
+  // Wall time runs parallel to UTC within a record, so the cut points map
+  // straight back to real instants.
+  const isOpenEnd = segment.endMs === null && to === wallEnd
+  const shift = blockMs - day
+  return {
+    ...segment,
+    key: `${segment.key}@${day}`,
+    startMs: segment.startMs + (from - segment.wallStartMs),
+    endMs: isOpenEnd ? null : segment.startMs + (to - segment.wallStartMs),
+    wallStartMs: from + shift,
+    wallEndMs: isOpenEnd ? null : to + shift,
+    wallShiftMs: shift,
+    cutStart: from > segment.wallStartMs,
+    cutEnd: to < wallEnd,
+  }
+}
+
+const dayTotalsOf = (segments: Segment[], now: number): Row['totals'] => {
+  const totals = { work: 0, direct: 0, indirect: 0, admin: 0, gap: 0, breaks: 0 }
+  segments.forEach((segment) => {
+    const seconds = ((segment.endMs ?? now) - segment.startMs) / 1000
+    if (segment.kind === 'gap') totals.gap += seconds
+    if (segment.kind === 'assignment' && segment.jobTypeId === '1') totals.direct += seconds
+    if (segment.kind === 'assignment' && segment.jobTypeId === '2') totals.indirect += seconds
+    if (segment.kind === 'assignment' && segment.jobTypeId === '3') totals.admin += seconds
+    if (segment.kind === 'punch' && segment.punchType === WORK_PUNCH) totals.work += seconds
+    if (segment.kind === 'punch' && (segment.punchType === 'break' || segment.punchType === 'lunch')) totals.breaks += seconds
+  })
+  return totals
+}
+
+// `employees` in the order their blocks run across the timeline.
+const toDayRows = (employees: Row[], range: Span | null, now: number) =>
+  daysOf(employees, range, now).map((day): Row => {
+    const segments = employees.flatMap((employee, index) => employee.segments.flatMap((segment) => {
+      const piece = pieceOf(segment, day, index * DAY_MS, now)
+      return piece ? [{ ...piece, owner: employee }] : []
+    }))
+    return {
+      key: `day-${day}`,
+      day,
+      cargoId: '',
+      sourceCargoId: '',
+      name: formatDay(day, WALL),
+      employeeName: '',
+      supervisorName: null,
+      jobTitle: null,
+      timeZone: employees[0]?.timeZone ?? 'UTC',
+      totals: dayTotalsOf(segments, now),
+      flags: [],
+      canReset: false,
+      isLocked: false,
+      raw: {},
+      segments,
+    }
+  })
+
 // Greedy interval packing: place each record in the first sub-row that is free
 // at its start time. A lane with no overlaps collapses to a single row.
+// Packs by position on the axis (wall time), so pieces in different employees'
+// blocks of a day row never land in the same sub-row by accident.
 const packRows = (items: Segment[], endOf: (segment: Segment) => number) => {
   const rows: Segment[][] = []
   const rowEnds: number[] = []
-  const sorted = [...items].sort((a, b) => a.startMs - b.startMs)
+  const sorted = [...items].sort((a, b) => a.wallStartMs - b.wallStartMs)
   sorted.forEach((segment) => {
     const end = endOf(segment)
-    const index = rowEnds.findIndex((rowEnd) => rowEnd <= segment.startMs)
+    const index = rowEnds.findIndex((rowEnd) => rowEnd <= segment.wallStartMs)
     if (index === -1) {
       rows.push([segment])
       rowEnds.push(end)
@@ -725,34 +836,41 @@ const firstRowAt = (offsets: number[], y: number) => {
 
 // Everything the query returned for the record, plus who it belongs to and
 // what the chart worked out about it.
+const ownerFields = (employee: Row) => ({ cargoId: employee.sourceCargoId, employeeName: employee.employeeName })
+
+// Always the whole record — on a day row, a midnight piece reports the record
+// it came from (and its employee), so tools act on the real log.
 const logPayload = (segment: Segment, row: Row, now: number): Retool.SerializableObject => ({
   ...segment.raw,
+  ...ownerFields(segment.owner ?? row),
   // An object like the full data's, so handlers can keep reading `log.type.value`.
   type: { value: segment.type, label: segment.recordTypeLabel },
   isLocked: segment.isLocked,
-  cargoId: row.sourceCargoId,
-  employeeName: row.name,
   jobType: segment.kind === 'assignment' && segment.jobTypeId !== null ? segment.typeLabel : null,
   lane: segment.lane,
   kind: segment.kind,
-  isOpen: segment.endMs === null,
-  startMs: segment.startMs,
-  endMs: segment.endMs,
+  isOpen: segment.fullEndMs === null,
+  startMs: segment.fullStartMs,
+  endMs: segment.fullEndMs,
   // Recomputed rather than passed through: the query's `duration` is fixed at
   // fetch time, so it drifts for a still-open segment.
-  durationSeconds: Math.round(((segment.endMs ?? now) - segment.startMs) / 1000),
-  localStart: formatClock(segment.startMs, segment.timeZone),
-  localEnd: segment.endMs === null ? null : formatClock(segment.endMs, segment.timeZone),
+  durationSeconds: Math.round(((segment.fullEndMs ?? now) - segment.fullStartMs) / 1000),
+  localStart: formatClock(segment.fullStartMs, segment.timeZone),
+  localEnd: segment.fullEndMs === null ? null : formatClock(segment.fullEndMs, segment.timeZone),
   hasIssues: issuesOf(segment).length > 0,
 })
 
 const formatShare = (seconds: number, total: number) =>
   total > 0 ? `${Math.round((seconds / total) * 100)}%` : '\u2013'
 
+const tooltipTitleOf = (segment: Segment, row: Row) => (
+  segment.owner ? `${segment.owner.employeeName} \u00B7 ${row.name}` : row.name
+)
+
 const employeePayload = (row: Row): Retool.SerializableObject => ({
   ...row.raw,
   cargoId: row.sourceCargoId,
-  employeeName: row.name,
+  employeeName: row.employeeName,
   isLocked: row.isLocked,
 })
 
@@ -816,10 +934,15 @@ type FirstRecord = { start: number; duration: number }
 // (first shift, first punch-in, …) and 6:00a compares equal across time zones.
 // Equal starts fall back to that record's length — shortest first ascending,
 // longest first descending. A row with nothing that day sorts last either way.
+// Day rows are named by their date label, so they order by the date itself.
+const byName = (a: Row, b: Row) => (
+  a.day !== null && b.day !== null ? a.day - b.day : a.name.localeCompare(b.name)
+)
+
 const compareRows = (rules: SortRule[], firstOf: Map<string, FirstRecord>) => (a: Row, b: Row) => {
   const orderBy = (rule: SortRule) => {
     const sign = rule.direction === 'asc' ? 1 : -1
-    if (rule.key === 'name') return sign * a.name.localeCompare(b.name)
+    if (rule.key === 'name') return sign * byName(a, b)
     if (rule.key === 'flags') return sign * (a.flags.length - b.flags.length)
     if (rule.key === 'start') {
       const first = firstOf.get(a.key)
@@ -830,7 +953,7 @@ const compareRows = (rules: SortRule[], firstOf: Map<string, FirstRecord>) => (a
     return sign * (a.totals[rule.key] - b.totals[rule.key])
   }
   const decided = rules.map(orderBy).find((order) => order !== 0)
-  return decided ?? a.name.localeCompare(b.name)
+  return decided ?? byName(a, b)
 }
 
 const BROWSER_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -1044,6 +1167,10 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
   const [resize, setResize] = useState<{ column: 'name' | 'totals'; startX: number; startWidth: number } | null>(null)
   const [hoveredHandle, setHoveredHandle] = useState<'name' | 'totals' | null>(null)
   const [isTotalsCollapsed, setIsTotalsCollapsed] = useState(false)
+  // Days: the Employees view turned around — a row per day, and across the
+  // timeline every employee's 12a–12a side by side, the way days sit side by
+  // side for an employee. Zoom, scroll and expand work exactly the same.
+  const [isDayMode, setIsDayMode] = useState(false)
   const nameWidth = columns.name
   const totalsWidth = isTotalsCollapsed ? COLLAPSED_TOTALS_WIDTH : columns.totals
   const totalColumnWidth = (column: typeof TOTAL_COLUMNS[number]) =>
@@ -1054,7 +1181,7 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
     () => flagSlots || rows.reduce((most, row) => Math.max(most, row.flags.length), 0),
     [flagSlots, rows],
   )
-  const flagsWidth = maxFlags === 0
+  const flagsWidth = maxFlags === 0 || isDayMode
     ? 0
     : Math.max(MIN_FLAGS_WIDTH, CELL_PADDING * 2 + maxFlags * FLAG_ICON_WIDTH + (maxFlags - 1) * FLAG_GAP)
   // Everything pinned left of the timeline: the name column, then flags.
@@ -1181,7 +1308,18 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
 
   // Rows arrive already filtered by Retool. Flags were computed by the
   // transformer against every record, so filtering never changes them.
-  const shown = rows
+  // In Days view the employees' blocks run across in name order.
+  const dayRows = useMemo(() => (isDayMode ? toDayRows(rows, range, now) : []), [isDayMode, rows, range, now])
+  const shown = isDayMode ? dayRows : rows
+
+  // The two views have different axes, so switching starts from fit-to-width.
+  const switchRows = (toDays: boolean) => {
+    if (toDays === isDayMode) return
+    pendingScrollRef.current = 0
+    setZoom(1)
+    setMenu(null)
+    setIsDayMode(toDays)
+  }
 
   // Expanded rows only show lanes that some visible record uses, so filtering
   // to punches and gaps drops the empty Shift lane.
@@ -1195,7 +1333,9 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
     return new Map([...zones].map((zone) => [zone, toWall(now, zone)]))
   }, [rows, now])
 
-  const wallEndOf = (segment: Segment) => segment.wallEndMs ?? wallNow.get(segment.timeZone) ?? now
+  const wallEndOf = (segment: Segment) => (
+    segment.wallEndMs ?? (wallNow.get(segment.timeZone) ?? now) + segment.wallShiftMs
+  )
   const endOf = (segment: Segment) => segment.endMs ?? now
 
   // Whole days, and the date filter's days when it's bound, so hiding records
@@ -1204,6 +1344,8 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
   // A loop, not Math.min(...spread): spreading tens of thousands of records
   // into call arguments overflows the stack.
   const domain = useMemo(() => {
+    // One 12a–12a block per employee.
+    if (isDayMode) return { start: 0, end: Math.max(rows.length, 1) * DAY_MS }
     let earliest = Infinity
     let latest = -Infinity
     shown.forEach((row) => row.segments.forEach((segment) => {
@@ -1213,14 +1355,15 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
     const start = Math.min(Math.floor(earliest / DAY_MS) * DAY_MS, range?.start ?? Infinity)
     const end = Math.max(Math.ceil(latest / DAY_MS) * DAY_MS, range?.end ?? -Infinity, start + DAY_MS)
     return { start, end }
-  }, [shown, wallNow, range])
+  }, [shown, wallNow, range, isDayMode, rows.length])
 
   const dataHours = (domain.end - domain.start) / HOUR_MS
   const available = Math.max(Math.floor(viewport.width - leftWidth - totalsWidth), MIN_PX_PER_HOUR)
   // Zoom 1 fits the whole range to the width when it fits, otherwise falls
   // back to a fixed scale and scrolls.
   const basePxPerHour = Math.max(MIN_PX_PER_HOUR, available / dataHours)
-  const minZoom = Math.min(1, available / Math.max(dataHours, MAX_VISIBLE_HOURS) / basePxPerHour)
+  // Days view stops at its blocks; there's nothing either side of them.
+  const minZoom = Math.min(1, available / Math.max(dataHours, isDayMode ? dataHours : MAX_VISIBLE_HOURS) / basePxPerHour)
   const effectiveZoom = clampZoom(zoom, minZoom)
   const frame = frameFor(domain, available, basePxPerHour, effectiveZoom)
   const { pxPerHour } = frame
@@ -1278,7 +1421,7 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
   const layouts = useMemo(
     () => new Map(shown
       .filter((row) => expanded.has(row.key) && expandable.has(row.key))
-      .map((row) => [row.key, layoutLanes(row.segments, activeLanes, endOf)])),
+      .map((row) => [row.key, layoutLanes(row.segments, activeLanes, wallEndOf)])),
     [shown, expanded, expandable, activeLanes],
   )
 
@@ -1409,9 +1552,7 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
   const ticks = Array.from({ length: tickCount }, (_, index) => firstTick + index * stepMs)
   // Date labels come from the calendar, not the ticks — deriving them from the
   // first tick made the label jump every time zooming changed the tick step.
-  // At one-day steps the day already in progress at the left edge is pinned to
-  // x = 0, and dropped if the next midnight's label would crowd it. Zoomed out
-  // further, labels step by several days, weekly steps landing on Mondays.
+  // Zoomed out, labels step by several days, weekly steps landing on Mondays.
   const dayStep = DAY_LABEL_STEPS.find((step) => step * pxPerHour * 24 >= MIN_DAY_LABEL_SPACING)
     ?? DAY_LABEL_STEPS[DAY_LABEL_STEPS.length - 1]
   const isOnDayStep = (day: number) => {
@@ -1423,15 +1564,13 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
     { length: Math.ceil((frame.end - firstDay) / DAY_MS) },
     (_, index) => firstDay + index * DAY_MS,
   )
-  const dayLabels = dayStep === 1
-    ? days
-      .map((day) => ({ day, left: Math.max(xOf(day), 0) }))
-      .filter((label, index, all) => (
-        index !== 0 || all.length === 1 || xOf(all[1].day) - label.left >= DAY_LABEL_GAP
-      ))
-    : days
-      .filter((day) => day >= frame.start && isOnDayStep(day))
-      .map((day) => ({ day, left: xOf(day) }))
+  // Each label owns the stretch until the next one and sticks to the left edge
+  // of the timeline while that stretch is in view, so zooming into the middle
+  // of a day never loses its date.
+  const dayLabels = days
+    .filter((day) => dayStep === 1 || (day >= frame.start && isOnDayStep(day)))
+    .map((day) => ({ day, left: xOf(day), width: xOf(day + dayStep * DAY_MS) - xOf(day) }))
+    .filter(({ left, width }) => left + width >= drawFromX && left <= drawToX)
   // Past a week per label the weekday names a single day no longer, so drop it.
   const formatDayLabel = (day: number) => (
     dayStep >= 7 ? formatter(WALL, { month: 'short', day: 'numeric' }).format(new Date(day)) : formatDay(day, WALL)
@@ -1439,7 +1578,15 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
   // Once ticks are a day apart every hour label would read '12a' — hide them,
   // and let the grid follow the date labels instead of drawing every day.
   const showHourLabels = stepMs < DAY_MS
-  const gridTicks = showHourLabels ? ticks : dayLabels.map((label) => label.day)
+  // Days view labels each employee's block where the Employees view labels
+  // each day; at block boundaries the heavier grid line falls the same way.
+  const employeeBlocks = isDayMode
+    ? rows.map((employee, index) => ({ employee, left: xOf(index * DAY_MS), width: 24 * pxPerHour }))
+      .filter(({ left, width }) => left + width >= drawFromX && left <= drawToX)
+    : []
+  const gridTicks = showHourLabels
+    ? ticks
+    : isDayMode ? rows.map((_, index) => index * DAY_MS) : dayLabels.map((label) => label.day)
   const showMinutes = stepMs < HOUR_MS
   const today = Math.floor(toWall(now, BROWSER_ZONE) / DAY_MS) * DAY_MS
 
@@ -1449,6 +1596,7 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
     style: CSSProperties,
     reactKey: string = key,
     day?: number,
+    name: string | null = typeof label === 'string' ? label : null,
   ) => {
     // A date label only shows the arrow when it's the day being sorted.
     const index = sort.findIndex((rule) => rule.key === key && rule.day === day)
@@ -1460,7 +1608,7 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
         onMouseDown={(event) => event.stopPropagation()}
         onClick={(event) => setSort((previous) => nextSort(previous, key, event.shiftKey, day))}
         // A truncated label is still readable in full on hover.
-        title={`${typeof label === 'string' ? `${label} \u2014 ` : ''}Click to sort, shift-click to add a sort`}
+        title={`${name ? `${name} \u2014 ` : ''}Click to sort, shift-click to add a sort`}
         style={{ ...sortHeaderStyle, ...style, color: rule ? '#243B53' : style.color ?? '#829AB1' }}
       >
         <span style={sortLabelStyle}>{label}</span>
@@ -1502,11 +1650,12 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
     setMenu(null)
   }
 
-  // One look for every bar, collapsed or expanded: fill, border, label, ⚠ and
-  // the open-segment fade. Callers only choose the vertical position.
-  const renderBar = (segment: Segment, row: Row, style: CSSProperties) => {
-    const left = xOf(segment.wallStartMs)
-    const width = Math.max(xOf(wallEndOf(segment)) - left, 2)
+  // One look for every bar, collapsed or expanded, in either view: fill,
+  // border, label, ⚠ and the open-segment fade. Callers choose the vertical
+  // position, and the Days grid passes its own horizontal placement.
+  const renderBar = (segment: Segment, row: Row, style: CSSProperties, x: (wallMs: number) => number = xOf) => {
+    const left = x(segment.wallStartMs)
+    const width = Math.max(x(wallEndOf(segment)) - left, 2)
     const isOpen = segment.endMs === null
     // The marker shows the first problem's icon; a lock alone still gets its
     // icon but not the warning border, since it isn't a problem.
@@ -1520,8 +1669,8 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
     return (
       <div
         key={segment.key}
-        onMouseEnter={hover(segment, row.name)}
-        onMouseMove={hover(segment, row.name)}
+        onMouseEnter={hover(segment, tooltipTitleOf(segment, row))}
+        onMouseMove={hover(segment, tooltipTitleOf(segment, row))}
         onMouseLeave={() => setHovered(null)}
         onClick={openMenu(segment, row)}
         style={{
@@ -1536,6 +1685,10 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
           cursor: 'pointer',
           color: segment.colors.text,
           ...(isOpen && width > FADE_PX + 6 ? { maskImage: fade, WebkitMaskImage: fade } : {}),
+          // A record cut at midnight gets square, dashed edges where it
+          // continues on the neighboring day's row.
+          ...(segment.cutStart ? { borderTopLeftRadius: 0, borderBottomLeftRadius: 0, borderLeftStyle: 'dashed' } : {}),
+          ...(segment.cutEnd ? { borderTopRightRadius: 0, borderBottomRightRadius: 0, borderRightStyle: 'dashed' } : {}),
           ...style,
         }}
       >
@@ -1557,12 +1710,12 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
   // Collapsed. A row with a single lane draws it exactly like an expanded lane.
   // A mixed row layers shift → punch → activity, each inset inside the last,
   // so all three stay visible in one row.
-  const renderCompact = (row: Row) => {
+  const renderCompact = (row: Row, x = xOf, isVisible = isDrawn) => {
     const lanesPresent = LANES.filter((lane) => row.segments.some((segment) => segment.lane === lane))
-    const drawn = row.segments.filter(isDrawn)
+    const drawn = row.segments.filter(isVisible)
     if (lanesPresent.length === 1) {
       const top = (ROW_HEIGHT - LANE_HEIGHT) / 2
-      return drawn.map((segment) => renderBar(segment, row, { top, height: LANE_HEIGHT }))
+      return drawn.map((segment) => renderBar(segment, row, { top, height: LANE_HEIGHT }, x))
     }
     const inset = (lane: Lane) => {
       const depth = lanesPresent.indexOf(lane)
@@ -1570,10 +1723,10 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
     }
     return lanesPresent.flatMap((lane) => drawn
       .filter((segment) => segment.lane === lane)
-      .map((segment) => renderBar(segment, row, inset(lane))))
+      .map((segment) => renderBar(segment, row, inset(lane), x)))
   }
 
-  const renderExpanded = (row: Row, lanes: LaneLayout[]) => lanes.map((lane) => lane.rows.map((laneRow, index) => (
+  const renderExpanded = (row: Row, lanes: LaneLayout[], x = xOf, isVisible = isDrawn) => lanes.map((lane) => lane.rows.map((laneRow, index) => (
     <div
       key={`${lane.lane}-${index}`}
       style={{
@@ -1584,7 +1737,7 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
         height: LANE_HEIGHT,
       }}
     >
-      {laneRow.filter(isDrawn).map((segment) => renderBar(segment, row, {}))}
+      {laneRow.filter(isVisible).map((segment) => renderBar(segment, row, {}, x))}
     </div>
   )))
 
@@ -1592,6 +1745,44 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
     left: Math.min(drag.startX, drag.currentX),
     width: Math.abs(drag.currentX - drag.startX),
   }
+
+  // Shared by both views' footers: the employee count with the
+  // Employees | Days toggle, and refresh.
+  const footerCount = (
+    <>
+      <span style={footerCountTextStyle}>
+        {rows.length} {rows.length === 1 ? 'employee' : 'employees'}
+      </span>
+      <div role="radiogroup" aria-label="View" style={rowsToggleStyle}>
+        {[{ label: 'Employees', toDays: false }, { label: 'Days', toDays: true }].map((option) => (
+          <button
+            key={option.label}
+            type="button"
+            role="radio"
+            aria-checked={option.toDays === isDayMode}
+            onClick={() => switchRows(option.toDays)}
+            style={{ ...rowsToggleButtonStyle, ...(option.toDays === isDayMode ? rowsToggleActiveStyle : {}) }}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </>
+  )
+
+  const refreshButton = (
+    <button
+      type="button"
+      title="Refresh"
+      disabled={isLoading}
+      onClick={onRefresh}
+      style={{ ...refreshStyle, cursor: isLoading ? 'default' : 'pointer' }}
+    >
+      <ArrowPathIcon
+        style={{ ...refreshIconStyle, animation: isLoading ? 'labor-timelines-spin 0.9s linear infinite' : undefined }}
+      />
+    </button>
+  )
 
   // Handles sit outside the scroll area so they stay on the column edges while
   // the chart scrolls; clientWidth excludes the vertical scrollbar.
@@ -1617,7 +1808,7 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
         <div style={{ ...contentStyle, width: contentWidth }}>
           <div style={{ ...headerStyle, width: contentWidth }}>
             <div style={{ ...stickyLeftStyle, ...cornerStyle, width: nameWidth }}>
-              {sortHeader('name', 'Employee', { paddingLeft: NAME_INDENT, height: DAY_BAND })}
+              {sortHeader('name', isDayMode ? 'Day' : 'Employee', { paddingLeft: NAME_INDENT, height: DAY_BAND })}
               <label style={{ ...expandAllStyle, opacity: expandable.size > 0 ? 1 : 0.4 }}>
                 <button
                   type="button"
@@ -1641,15 +1832,50 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
               onMouseDown={onBodyMouseDown}
               style={{ position: 'relative', width: trackWidth, height: AXIS_HEIGHT, cursor: 'crosshair', userSelect: 'none' }}
             >
-              {dayLabels.filter(({ left }) => isDrawnX(left)).map(({ day, left }) => sortHeader(
-                'start',
-                <>
-                  {day === today && <span style={todayDotStyle} />}
-                  {formatDayLabel(day)}
-                </>,
-                { ...dayLabelStyle, left },
-                `day-${day}`,
-                day,
+              {employeeBlocks.map(({ employee, left, width }) => (
+                <div key={employee.key} style={{ ...labelBlockStyle, left, width }}>
+                  <div
+                    // The axis starts a drag-zoom on mousedown; the label's buttons shouldn't.
+                    onMouseDown={(event) => event.stopPropagation()}
+                    style={{ ...employeeLabelStyle, left: leftWidth, maxWidth: Math.max(width - CELL_PADDING, 0) }}
+                  >
+                    <span style={employeeLabelNameStyle}>{employee.name}</span>
+                    <span style={pillStyle}>{employee.cargoId}</span>
+                    {employee.flags.length > 0 && (
+                      <span
+                        onMouseEnter={hoverFlags(employee)}
+                        onMouseMove={hoverFlags(employee)}
+                        onMouseLeave={() => setHovered(null)}
+                        style={{ ...employeeFlagsStyle, height: DAY_BAND }}
+                      >
+                        {employee.flags.map((flag, flagIndex) => (
+                          <span key={`${flag.id}-${flagIndex}`} style={{ ...flagIconStyle, color: flag.color }}>
+                            {flag.icon ?? '\u26A0'}
+                          </span>
+                        ))}
+                      </span>
+                    )}
+                    {employee.canReset && (
+                      <button type="button" title="Reset" onClick={() => onReset(employeePayload(employee))} style={resetStyle}>
+                        <ArrowPathIcon style={resetIconStyle} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {!isDayMode && dayLabels.map(({ day, left, width }) => (
+                <div key={`day-${day}`} style={{ ...labelBlockStyle, left, width }}>
+                  {sortHeader(
+                    'start',
+                    <>
+                      {day === today && <span style={todayDotStyle} />}
+                      {formatDayLabel(day)}
+                    </>,
+                    { ...dayLabelStyle, left: leftWidth, maxWidth: width },
+                    `day-${day}`,
+                    day,
+                  )}
+                </div>
               ))}
               {showHourLabels && ticks.filter((tick) => isDrawnX(xOf(tick))).map((tick) => (
                 <div key={`tick-${tick}`} style={{ ...hourLabelStyle, left: xOf(tick) }}>
@@ -1710,8 +1936,12 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
               const top = offsets[firstIndex + index]
               const height = heightOf(row)
               const lanes = layouts.get(row.key)
-              const rowNow = wallNow.get(row.timeZone) ?? toWall(now, row.timeZone)
-              const nowVisible = rowNow >= frame.start && rowNow <= frame.end
+              // A day row shows "now" in each employee's block, but only on today.
+              const rowDay = row.day
+              const nowTicks = rowDay === null
+                ? [wallNow.get(row.timeZone) ?? toWall(now, row.timeZone)]
+                : rows.map((employee, blockIndex) => toWall(now, employee.timeZone) - rowDay + blockIndex * DAY_MS)
+                  .filter((tick, blockIndex) => tick >= blockIndex * DAY_MS && tick < (blockIndex + 1) * DAY_MS)
               return (
                 <div key={row.key} style={{ ...rowStyle, top, height, width: contentWidth }}>
                   <div
@@ -1727,8 +1957,9 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
                     <div style={{ ...nameBlockStyle, justifyContent: lanes ? 'flex-start' : 'center', paddingTop: lanes ? ROW_PADDING + 2 : 0 }}>
                       <div style={nameLineStyle}>
                         <span style={chevronStyle}>{expandable.has(row.key) && (lanes ? '▾' : '▸')}</span>
+                        {row.day === today && <span style={todayDotStyle} />}
                         <span style={nameTextStyle}>{row.name}</span>
-                        <span style={pillStyle}>{row.cargoId}</span>
+                        {row.day === null && <span style={pillStyle}>{row.cargoId}</span>}
                         {row.canReset && (
                           <button
                             type="button"
@@ -1743,9 +1974,11 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
                           </button>
                         )}
                       </div>
-                      <div style={subLineStyle}>
-                        {[row.supervisorName, row.jobTitle].filter(Boolean).join(' · ')}
-                      </div>
+                      {row.day === null && (
+                        <div style={subLineStyle}>
+                          {[row.supervisorName, row.jobTitle].filter(Boolean).join(' · ')}
+                        </div>
+                      )}
                     </div>
                     {lanes && (
                       <div style={{ position: 'relative', width: LANE_LABEL_WIDTH, flex: '0 0 auto' }}>
@@ -1792,7 +2025,9 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
 
                   <div style={{ position: 'relative', width: trackWidth, height: '100%', flex: '0 0 auto' }}>
                     {lanes ? renderExpanded(row, lanes) : renderCompact(row)}
-                    {nowVisible && <div style={{ ...nowTickStyle, left: xOf(rowNow) }} />}
+                    {nowTicks
+                      .filter((tick) => tick >= frame.start && tick <= frame.end && isDrawnX(xOf(tick)))
+                      .map((tick) => <div key={tick} style={{ ...nowTickStyle, left: xOf(tick) }} />)}
                   </div>
 
                   <div
@@ -1833,7 +2068,7 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
 
           <div style={{ ...footerStyle, width: contentWidth }}>
             <div style={{ ...stickyLeftStyle, ...footerCountStyle, width: nameWidth }}>
-              {shown.length} {shown.length === 1 ? 'employee' : 'employees'}
+              {footerCount}
             </div>
             {flagsWidth > 0 && (
               <div style={{ ...stickyLeftStyle, ...footerFlagsStyle, left: nameWidth, width: flagsWidth }} />
@@ -1847,20 +2082,7 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
                 width: totalsWidth,
               }}
             >
-              <button
-                type="button"
-                title="Refresh"
-                disabled={isLoading}
-                onClick={onRefresh}
-                style={{ ...refreshStyle, cursor: isLoading ? 'default' : 'pointer' }}
-              >
-                <ArrowPathIcon
-                  style={{
-                    ...refreshIconStyle,
-                    animation: isLoading ? 'labor-timelines-spin 0.9s linear infinite' : undefined,
-                  }}
-                />
-              </button>
+              {refreshButton}
             </div>
           </div>
         </div>
@@ -1911,11 +2133,11 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
             <div style={{ color: '#829AB1' }}>{hovered.employee}</div>
             <div style={{ fontWeight: 600 }}>{hovered.segment.label}</div>
             <div style={{ color: '#829AB1' }}>{hovered.segment.typeLabel}</div>
-            <div>{formatDurationSeconds(endOf(hovered.segment) - hovered.segment.startMs)}</div>
+            <div>{formatDurationSeconds((hovered.segment.fullEndMs ?? now) - hovered.segment.fullStartMs)}</div>
             <div style={{ color: '#829AB1' }}>
-              {formatClockSeconds(hovered.segment.startMs, hovered.segment.timeZone)}
+              {formatClockSeconds(hovered.segment.fullStartMs, hovered.segment.timeZone)}
               {' – '}
-              {hovered.segment.endMs === null ? 'open' : formatClockSeconds(hovered.segment.endMs, hovered.segment.timeZone)}
+              {hovered.segment.fullEndMs === null ? 'open' : formatClockSeconds(hovered.segment.fullEndMs, hovered.segment.timeZone)}
             </div>
             {hovered.segment.assignedByName && (
               <div style={{ color: '#829AB1' }}>
@@ -2075,11 +2297,48 @@ const footerStyle: CSSProperties = {
 const footerCountStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
   // Lines up with the employee names.
   paddingLeft: CELL_PADDING + NAME_INDENT,
+  paddingRight: CELL_PADDING - 4,
   color: '#829AB1',
   fontWeight: 500,
   borderRight: '1px solid #E4E7EB',
+}
+
+const footerCountTextStyle: CSSProperties = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const rowsToggleStyle: CSSProperties = {
+  flex: '0 0 auto',
+  display: 'flex',
+  padding: 2,
+  borderRadius: 4,
+  background: '#F0F4F8',
+}
+
+const rowsToggleButtonStyle: CSSProperties = {
+  padding: '0 8px',
+  height: 16,
+  border: 'none',
+  borderRadius: 3,
+  background: 'transparent',
+  color: '#829AB1',
+  font: 'inherit',
+  fontSize: 10,
+  fontWeight: 500,
+  cursor: 'pointer',
+}
+
+const rowsToggleActiveStyle: CSSProperties = {
+  background: '#FFFFFF',
+  color: '#243B53',
+  boxShadow: '0 1px 1px rgba(0,0,0,0.08)',
 }
 
 const footerActionsStyle: CSSProperties = {
@@ -2364,9 +2623,39 @@ const laneLabelStyle: CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-const dayLabelStyle: CSSProperties = {
+// A day's (or employee's) stretch of the axis. No overflow clipping: that
+// would stop the label inside from sticking.
+const labelBlockStyle: CSSProperties = {
   position: 'absolute',
   top: 0,
+  height: DAY_BAND,
+}
+
+// Sticks just right of the pinned columns (`left` is set to their width) while
+// its block is in view; the next block's label pushes it out.
+const employeeLabelStyle: CSSProperties = {
+  position: 'sticky',
+  width: 'max-content',
+  height: DAY_BAND,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+  paddingLeft: 4,
+  overflow: 'hidden',
+  whiteSpace: 'nowrap',
+}
+
+const employeeLabelNameStyle: CSSProperties = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  color: '#243B53',
+  fontWeight: 600,
+}
+
+const dayLabelStyle: CSSProperties = {
+  position: 'sticky',
+  width: 'max-content',
   height: DAY_BAND,
   paddingLeft: 4,
   color: '#486581',
