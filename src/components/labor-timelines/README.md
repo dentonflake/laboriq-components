@@ -24,8 +24,17 @@ draw them.
 | *Flags* (`flagDefinitions`) | The flag definitions |
 | *Tools* (`toolDefinitions`) | The tool definitions |
 | *Loading* (`isLoading`) | `{{ editLabor__query__getEmployees.isFetching }}` |
+| *Range start* (`rangeStart`) | The date filter's first day, `YYYY-MM-DD` |
+| *Range end* (`rangeEnd`) | The date filter's last day, `YYYY-MM-DD` (inclusive) |
 
 The four definition inputs are the same arrays `groupLaborRecords` uses.
+
+**Range.** The timeline spans whole days, midnight to midnight — exactly the
+*Range start*–*Range end* days when they're bound, otherwise every day that
+has data. Because the edges never depend on which records are visible,
+filtering doesn't move the zoom or scroll, and a day a filter empties out
+still shows (empty) rather than disappearing. Records that run past the range
+— an overnight shift ending the next morning — widen it to fit.
 
 While `isLoading` is true the component shows a loading bar instead of *No
 records* on the first load, and a thin bar across the top (over the current
@@ -166,8 +175,10 @@ array plus a record-specific `message`:
 
 **Employee flags** arrive the same way on `flags[]` and show as icons in their
 own **Flags** column, pinned between the names and the timeline — every one,
-`discrepancy` and `hasLockedLogs` included. The column is as wide as the most
-flags any shown employee has, and disappears when nobody has one. Hover the
+`discrepancy` and `hasLockedLogs` included. The column fits every flag
+definition with `scope: 'employee'`, so its width (and the timeline's) never
+changes with the filters. Without scopes on the definitions it falls back to
+the most flags any shown employee has. Hover the
 icons for a tooltip listing each flag as `{icon} {label}: {message}`.
 
 ## Corrected assignments

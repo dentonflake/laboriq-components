@@ -41,6 +41,8 @@ type Job = {
 // A flag definition from the flags array, plus a record-specific `message`.
 type FlagInfo = {
   value?: string | number | null
+  // 'employee' or 'record'; employee-scope definitions size the Flags column.
+  scope?: string | null
   label?: string | null
   caption?: string | null
   icon?: string | null
@@ -450,6 +452,13 @@ const computeOffsetMs = (utcMs: number, timeZone: string) => {
 const toWall = (utcMs: number, timeZone: string) => utcMs + tzOffsetMs(utcMs, timeZone)
 
 const WALL = 'UTC'
+
+// 'YYYY-MM-DD' (anything after the date is ignored) → that day's midnight on
+// the wall-clock axis.
+const toWallDay = (value: unknown) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(typeof value === 'string' ? value : '')
+  return match ? Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : null
+}
 
 // '6 AM' → '6a', '12 PM' → '12p'
 const formatHour = (ms: number, timeZone: string) => {
@@ -865,6 +874,23 @@ export const LaborTimelines = () => {
     label: 'Loading',
     description: 'Bind to the employees query isFetching. Shows a loading bar instead of "No records" while it runs.',
   })
+  const [rangeStart] = Retool.useStateString({
+    name: 'rangeStart',
+    label: 'Range start',
+    description: 'First day shown (YYYY-MM-DD) — bind to the date filter so filtering never moves the edges.',
+  })
+  const [rangeEnd] = Retool.useStateString({
+    name: 'rangeEnd',
+    label: 'Range end',
+    description: 'Last day shown (YYYY-MM-DD), inclusive.',
+  })
+  // Midnight to midnight across the chosen days; null until both are set.
+  const range = useMemo((): Span | null => {
+    const start = toWallDay(rangeStart)
+    const end = toWallDay(rangeEnd)
+    return start === null || end === null || end < start ? null : { start, end: end + DAY_MS }
+  }, [rangeStart, rangeEnd])
+
   const [types] = Retool.useStateArray({
     name: 'types',
     label: 'Types',
@@ -905,6 +931,13 @@ export const LaborTimelines = () => {
       ? colorsOf(lookups.jobTypes.get(column.colorOf.jobType), 'Assignment').text
       : colorsOf(lookups.types.get(column.colorOf.type), column.colorOf.type).text,
   ])) as Record<TotalKey, string>, [lookups])
+
+  // How many employee flags exist, so the Flags column keeps one width no matter
+  // who's filtered in. Zero when the definitions carry no scope.
+  const flagSlots = useMemo(
+    () => [...lookups.flags.values()].filter((flag) => flag.scope === 'employee').length,
+    [lookups],
+  )
 
   const employeesKey = JSON.stringify(employees)
   // A cleared or still-loading binding arrives as '' rather than [].
@@ -962,6 +995,8 @@ export const LaborTimelines = () => {
     <Chart
       rows={rows}
       totalColors={totalColors}
+      range={range}
+      flagSlots={flagSlots}
       isLoading={isLoading}
       onToolPick={onToolPick}
       onReset={onResetEmployee}
@@ -981,13 +1016,15 @@ const LoadingBar = ({ style }: { style?: CSSProperties }) => (
 type ChartProps = {
   rows: Row[]
   totalColors: Record<TotalKey, string>
+  range: Span | null
+  flagSlots: number
   isLoading: boolean
   onToolPick: (log: Retool.SerializableObject) => void
   onReset: (employee: Retool.SerializableObject) => void
   onRefresh: () => void
 }
 
-const Chart = ({ rows, totalColors, isLoading, onToolPick, onReset, onRefresh }: ChartProps) => {
+const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onReset, onRefresh }: ChartProps) => {
   const hasOpenSegment = useMemo(
     () => rows.some((row) => row.segments.some((segment) => segment.endMs === null)),
     [rows],
@@ -1011,7 +1048,12 @@ const Chart = ({ rows, totalColors, isLoading, onToolPick, onReset, onRefresh }:
   const totalsWidth = isTotalsCollapsed ? COLLAPSED_TOTALS_WIDTH : columns.totals
   const totalColumnWidth = (column: typeof TOTAL_COLUMNS[number]) =>
     ((column.width + TOTAL_GAP) / TOTAL_COLUMNS_WIDTH) * (totalsWidth - TOTALS_PADDING)
-  const maxFlags = useMemo(() => rows.reduce((most, row) => Math.max(most, row.flags.length), 0), [rows])
+  // Sized from the definitions when they say which flags are employee flags, so
+  // filtering never changes the column (and the timeline's width with it).
+  const maxFlags = useMemo(
+    () => flagSlots || rows.reduce((most, row) => Math.max(most, row.flags.length), 0),
+    [flagSlots, rows],
+  )
   const flagsWidth = maxFlags === 0
     ? 0
     : Math.max(MIN_FLAGS_WIDTH, CELL_PADDING * 2 + maxFlags * FLAG_ICON_WIDTH + (maxFlags - 1) * FLAG_GAP)
@@ -1156,6 +1198,9 @@ const Chart = ({ rows, totalColors, isLoading, onToolPick, onReset, onRefresh }:
   const wallEndOf = (segment: Segment) => segment.wallEndMs ?? wallNow.get(segment.timeZone) ?? now
   const endOf = (segment: Segment) => segment.endMs ?? now
 
+  // Whole days, and the date filter's days when it's bound, so hiding records
+  // never moves the edges — zoom and scroll stay put, and empty days still
+  // show. Records past the range (an overnight shift) widen it to fit.
   // A loop, not Math.min(...spread): spreading tens of thousands of records
   // into call arguments overflows the stack.
   const domain = useMemo(() => {
@@ -1165,11 +1210,10 @@ const Chart = ({ rows, totalColors, isLoading, onToolPick, onReset, onRefresh }:
       earliest = Math.min(earliest, segment.wallStartMs)
       latest = Math.max(latest, wallEndOf(segment))
     }))
-    return {
-      start: Math.floor(earliest / HOUR_MS) * HOUR_MS,
-      end: Math.max(Math.ceil(latest / HOUR_MS) * HOUR_MS, Math.floor(earliest / HOUR_MS) * HOUR_MS + HOUR_MS),
-    }
-  }, [shown, wallNow])
+    const start = Math.min(Math.floor(earliest / DAY_MS) * DAY_MS, range?.start ?? Infinity)
+    const end = Math.max(Math.ceil(latest / DAY_MS) * DAY_MS, range?.end ?? -Infinity, start + DAY_MS)
+    return { start, end }
+  }, [shown, wallNow, range])
 
   const dataHours = (domain.end - domain.start) / HOUR_MS
   const available = Math.max(Math.floor(viewport.width - leftWidth - totalsWidth), MIN_PX_PER_HOUR)
