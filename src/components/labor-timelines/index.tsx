@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import React, { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Retool } from '@tryretool/custom-component-support'
 import {
   ArrowPathIcon,
@@ -232,7 +232,9 @@ type Hovered =
 
 type Menu = { segment: Segment; row: Row; x: number; top: number; bottom: number }
 
-type SortKey = 'name' | 'flags' | 'start' | 'work' | 'direct' | 'indirect' | 'admin' | 'gap' | 'breaks'
+// Each share column also sorts by its percentage, under its own key.
+type ShareSortKey = 'directShare' | 'indirectShare' | 'adminShare' | 'gapShare'
+type SortKey = 'name' | 'flags' | 'start' | 'work' | 'direct' | 'indirect' | 'admin' | 'gap' | 'breaks' | ShareSortKey
 type SortDirection = 'asc' | 'desc'
 // A start sort remembers which day (wall-clock midnight) its date label was.
 type SortRule = { key: SortKey; direction: SortDirection; day?: number }
@@ -241,9 +243,10 @@ const HOUR_MS = 3600000
 const MINUTE_MS = 60000
 const DAY_MS = 86400000
 const MIN_PX_PER_HOUR = 60
-// Direct–Gap split up the punched work time, so only those four show a share
-// (of their sum). Break/Lunch is break + lunch punches; Work is work punches.
-// `width` is the room each column's text needs at the default size: '11h 24m'
+// Direct–Gap split up the punched work time, so only those four get a share
+// sub-column next to their time (a share of their sum). Break/Lunch is break +
+// lunch punches; Work is work punches.
+// `width` is the room each column's time needs at the default size: '11h 24m'
 // takes 48px, and the Break/Lunch header more. Resizing scales them together.
 // `colorOf` names the definition whose text color the total wears — Break/Lunch
 // and Work are punch time, so they wear the Punch type's.
@@ -257,6 +260,14 @@ const TOTAL_COLUMNS = [
 ] as const
 
 type TotalKey = typeof TOTAL_COLUMNS[number]['key']
+type TotalColumn = typeof TOTAL_COLUMNS[number]
+// Room for '100%', and the space left of it.
+const SHARE_WIDTH = 32
+const SHARE_GAP = 8
+// How wide the right-aligned "Time" sub-label's text is at its 10px size; the
+// type label centers over the span from its left edge to the "%" label's right.
+const TIME_LABEL_WIDTH = 22
+const shareUnitsOf =(column: TotalColumn) => (column.hasShare ? SHARE_WIDTH + SHARE_GAP : 0)
 // Space left of every column's text, so right-aligned values never run into
 // the column before them.
 const TOTAL_GAP = 12
@@ -266,10 +277,10 @@ const DEFAULT_NAME_WIDTH = 240
 const MIN_NAME_WIDTH = 160
 const MAX_NAME_WIDTH = 480
 const TOTALS_PADDING = 16
-const TOTAL_COLUMNS_WIDTH = TOTAL_COLUMNS.reduce((sum, column) => sum + column.width + TOTAL_GAP, 0)
+const TOTAL_COLUMNS_WIDTH = TOTAL_COLUMNS.reduce((sum, column) => sum + column.width + TOTAL_GAP + shareUnitsOf(column), 0)
 const DEFAULT_TOTALS_WIDTH = TOTAL_COLUMNS_WIDTH + TOTALS_PADDING
 const MIN_TOTALS_WIDTH = Math.round(TOTAL_COLUMNS_WIDTH * 0.8) + TOTALS_PADDING
-const MAX_TOTALS_WIDTH = 480
+const MAX_TOTALS_WIDTH = 640
 // Collapsed, the totals shrink to a strip just wide enough for the expand and
 // refresh buttons.
 const COLLAPSED_TOTALS_WIDTH = 28
@@ -338,6 +349,10 @@ const DEFAULT_DIRECTION: Record<SortKey, SortDirection> = {
   admin: 'desc',
   gap: 'desc',
   breaks: 'desc',
+  directShare: 'desc',
+  indirectShare: 'desc',
+  adminShare: 'desc',
+  gapShare: 'desc',
 }
 const TODAY_COLOR = '#2680C2'
 
@@ -939,6 +954,20 @@ const byName = (a: Row, b: Row) => (
   a.day !== null && b.day !== null ? a.day - b.day : a.name.localeCompare(b.name)
 )
 
+// The punched work time that Direct–Gap split up: the denominator of a share.
+const sharedSeconds = (totals: Row['totals']) => totals.direct + totals.indirect + totals.admin + totals.gap
+
+const SHARE_SORT_KEYS: Record<ShareSortKey, TotalKey> = {
+  directShare: 'direct',
+  indirectShare: 'indirect',
+  adminShare: 'admin',
+  gapShare: 'gap',
+}
+
+const isShareSort = (key: SortKey): key is ShareSortKey => key in SHARE_SORT_KEYS
+
+// A share sort orders by percentage of the split; a row with nothing to split
+// has no percentage, so it sorts last either way.
 const compareRows = (rules: SortRule[], firstOf: Map<string, FirstRecord>) => (a: Row, b: Row) => {
   const orderBy = (rule: SortRule) => {
     const sign = rule.direction === 'asc' ? 1 : -1
@@ -949,6 +978,13 @@ const compareRows = (rules: SortRule[], firstOf: Map<string, FirstRecord>) => (a
       const second = firstOf.get(b.key)
       if (!first || !second) return first === second ? 0 : first ? -1 : 1
       return sign * (first.start - second.start || first.duration - second.duration)
+    }
+    if (isShareSort(rule.key)) {
+      const shared = SHARE_SORT_KEYS[rule.key]
+      const first = sharedSeconds(a.totals)
+      const second = sharedSeconds(b.totals)
+      if (first === 0 || second === 0) return first === second ? 0 : first === 0 ? 1 : -1
+      return sign * (a.totals[shared] / first - b.totals[shared] / second)
     }
     return sign * (a.totals[rule.key] - b.totals[rule.key])
   }
@@ -1173,8 +1209,9 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
   const [isDayMode, setIsDayMode] = useState(false)
   const nameWidth = columns.name
   const totalsWidth = isTotalsCollapsed ? COLLAPSED_TOTALS_WIDTH : columns.totals
-  const totalColumnWidth = (column: typeof TOTAL_COLUMNS[number]) =>
-    ((column.width + TOTAL_GAP) / TOTAL_COLUMNS_WIDTH) * (totalsWidth - TOTALS_PADDING)
+  const scaledWidth = (units: number) => (units / TOTAL_COLUMNS_WIDTH) * (totalsWidth - TOTALS_PADDING)
+  const timeWidth = (column: TotalColumn) => scaledWidth(column.width + TOTAL_GAP)
+  const shareWidth = (column: TotalColumn) => scaledWidth(shareUnitsOf(column))
   // Sized from the definitions when they say which flags are employee flags, so
   // filtering never changes the column (and the timeline's width with it).
   const maxFlags = useMemo(
@@ -1808,7 +1845,7 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
         <div style={{ ...contentStyle, width: contentWidth }}>
           <div style={{ ...headerStyle, width: contentWidth }}>
             <div style={{ ...stickyLeftStyle, ...cornerStyle, width: nameWidth }}>
-              {sortHeader('name', isDayMode ? 'Day' : 'Employee', { paddingLeft: NAME_INDENT, height: DAY_BAND })}
+              {sortHeader('name', isDayMode ? 'Day' : 'Employee', { ...parentHeaderStyle, paddingLeft: NAME_INDENT, height: DAY_BAND })}
               <label style={{ ...expandAllStyle, opacity: expandable.size > 0 ? 1 : 0.4 }}>
                 <button
                   type="button"
@@ -1825,12 +1862,17 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
             </div>
             {flagsWidth > 0 && (
               <div style={{ ...stickyLeftStyle, ...flagsHeaderStyle, left: nameWidth, width: flagsWidth }}>
-                {sortHeader('flags', 'Flags', { height: DAY_BAND })}
+                {sortHeader('flags', 'Flags', { ...parentHeaderStyle, height: DAY_BAND })}
               </div>
             )}
             <div
               onMouseDown={onBodyMouseDown}
-              style={{ position: 'relative', width: trackWidth, height: AXIS_HEIGHT, cursor: 'crosshair', userSelect: 'none' }}
+              // A date label's block spans its whole day (or several), so on a
+              // frame that ends mid-day it runs past the track and widens the
+              // scroll area — a zoom can then scroll into that overhang and
+              // strand the pinned totals short of the right edge. `clip`, not
+              // `hidden`, which would make this the sticky labels' scroller.
+              style={{ position: 'relative', width: trackWidth, height: AXIS_HEIGHT, cursor: 'crosshair', userSelect: 'none', overflow: 'clip' }}
             >
               {employeeBlocks.map(({ employee, left, width }) => (
                 <div key={employee.key} style={{ ...labelBlockStyle, left, width }}>
@@ -1905,12 +1947,44 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
                 >
                   <ChevronDoubleRightIcon style={collapseIconStyle} />
                 </button>
-                {TOTAL_COLUMNS.map((column) => sortHeader(column.key, column.label, {
-                  ...totalCellStyle,
-                  width: totalColumnWidth(column),
-                  justifyContent: 'flex-end',
-                  height: DAY_BAND,
-                }))}
+                {TOTAL_COLUMNS.map((column) => {
+                  if (!column.hasShare) {
+                    return sortHeader(column.key, column.label, {
+                      ...totalCellStyle,
+                      ...parentHeaderStyle,
+                      width: timeWidth(column),
+                      justifyContent: 'flex-end',
+                      height: DAY_BAND,
+                    })
+                  }
+                  const shareKey = `${column.key}Share` as const
+                  return (
+                    <div key={column.key}>
+                      <div
+                        style={{
+                          ...totalGroupLabelStyle,
+                          width: timeWidth(column) + shareWidth(column),
+                          paddingLeft: Math.max(timeWidth(column) - TIME_LABEL_WIDTH, 0),
+                        }}
+                      >
+                        {column.label}
+                      </div>
+                      <div style={{ display: 'flex' }}>
+                        {sortHeader(column.key, 'Time', {
+                          ...totalCellStyle,
+                          ...totalSubLabelStyle,
+                          width: timeWidth(column),
+                        }, column.key, undefined, `${column.label} time`)}
+                        {sortHeader(shareKey, '%', {
+                          ...totalCellStyle,
+                          ...totalSubLabelStyle,
+                          width: shareWidth(column),
+                          paddingLeft: SHARE_GAP,
+                        }, shareKey, undefined, `${column.label} percentage`)}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>
@@ -2042,16 +2116,19 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
                   >
                     {!isTotalsCollapsed && TOTAL_COLUMNS.map((column) => {
                       const seconds = row.totals[column.key]
-                      const sum = row.totals.direct + row.totals.indirect + row.totals.admin + row.totals.gap
                       return (
-                        <div
-                          key={column.key}
-                          style={{ ...totalCellStyle, width: totalColumnWidth(column), color: seconds > 0 ? totalColors[column.key] : '#BCCCDC' }}
-                        >
-                          <div>{formatTotal(seconds)}</div>
-                          {/* A blank line keeps every column's hours on the same baseline. */}
-                          <div style={shareStyle}>{column.hasShare ? formatShare(seconds, sum) : '\u00A0'}</div>
-                        </div>
+                        <Fragment key={column.key}>
+                          <div
+                            style={{ ...totalCellStyle, width: timeWidth(column), color: totalColors[column.key] }}
+                          >
+                            {formatTotal(seconds)}
+                          </div>
+                          {column.hasShare && (
+                            <div style={{ ...totalCellStyle, ...shareStyle, width: shareWidth(column), paddingLeft: SHARE_GAP }}>
+                              {formatShare(seconds, sharedSeconds(row.totals))}
+                            </div>
+                          )}
+                        </Fragment>
                       )
                     })}
                   </div>
@@ -2653,12 +2730,20 @@ const employeeLabelNameStyle: CSSProperties = {
   fontWeight: 600,
 }
 
+// Every parent column header (Employee/Day, Flags, dates, totals) wears this;
+// the sort arrow's darker color still marks the active one.
+const parentHeaderStyle: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 600,
+  color: '#486581',
+}
+
 const dayLabelStyle: CSSProperties = {
   position: 'sticky',
   width: 'max-content',
   height: DAY_BAND,
   paddingLeft: 4,
-  color: '#486581',
+  ...parentHeaderStyle,
   whiteSpace: 'nowrap',
 }
 
@@ -2818,6 +2903,29 @@ const flagIconStyle: CSSProperties = {
 const resetIconStyle: CSSProperties = {
   width: 12,
   height: 12,
+}
+
+// Spans a type's Time and % sub-columns. The sub-labels are right-aligned, so
+// the label is centered over where their text sits (see TIME_LABEL_WIDTH),
+// not over the cells' full widths.
+const totalGroupLabelStyle: CSSProperties = {
+  ...parentHeaderStyle,
+  display: 'flex',
+  boxSizing: 'border-box',
+  alignItems: 'center',
+  justifyContent: 'center',
+  height: DAY_BAND,
+  whiteSpace: 'nowrap',
+}
+
+// Sub-column headers (Time, %): the same weight and color on every one, a
+// step below the parent headers.
+const totalSubLabelStyle: CSSProperties = {
+  justifyContent: 'flex-end',
+  height: HOUR_BAND,
+  fontSize: 10,
+  fontWeight: 500,
+  color: '#829AB1',
 }
 
 const shareStyle: CSSProperties = {

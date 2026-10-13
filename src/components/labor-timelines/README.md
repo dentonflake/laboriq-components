@@ -97,11 +97,11 @@ raw value.
 ## Layout
 
 ```
-Employee        Expand all  │ Flags │ Mon Sep 21                     │ Direct Indirect  Admin   Gap Break/Lunch   Work
-                            │       │ 6a    9a    12p    3p    6p    │
-▸ Aaron Humphries  4277 ↻   │ ⚠️ ⏱️  │ ░[▓▓▓ Putaway ▓▓▓▓]░[▓▓]░      │ 6h 24m  1h 10m     0m   12m         45m 7h 46m
-  Marisa Miranda · Put Away │       │                                │   82%     15%      0%    3%
-▾ Matthew Harmon   3738     │       │  |==== work ====|              │     0m      0m 11h 24m    0m         30m 11h 24m
+Employee        Expand all  │ Flags │ Mon Sep 21                     │    Direct     Indirect       Admin         Gap  Break/Lunch   Work
+                            │       │ 6a    9a    12p    3p    6p    │  Time    %    Time    %    Time    %    Time    %
+▸ Aaron Humphries  4277 ↻   │ ⚠️ ⏱️  │ ░[▓▓▓ Putaway ▓▓▓▓]░[▓▓]░      │ 6h 24m  82%  1h 10m  15%     0m   0%    12m   3%         45m 7h 46m
+  Marisa Miranda · Put Away │       │                                │
+▾ Matthew Harmon   3738     │       │  |==== work ====|              │     0m   –      0m   –  11h 24m  100%     0m   –         30m 11h 24m
   Jason Rogers · Area Mgr   │       │  |==== work ===|=|             │
                   Activity  │       │  |=== Admin ===|=|             │
 ```
@@ -119,7 +119,7 @@ Employee        Expand all  │ Flags │ Mon Sep 21                     │ Dir
   sticks to the left edge of the timeline while its day is in view, so
   zooming into the middle of a day keeps it readable. Horizontal scroll and zoom are shared by every row.
 - **Resizable columns** — drag the inner edge of the name or totals column
-  (a line appears on hover). Names run 160–480px, totals 317–480px (392 by
+  (a line appears on hover). Names run 160–480px, totals 445–640px (552 by
   default) with the six total columns scaling together — Break/Lunch a little
   wider than the rest, and a 12px gap before each so values never touch; the timeline re-fits to what's
   left. Double-click a handle to reset. Widths last for the session.
@@ -132,7 +132,10 @@ Employee        Expand all  │ Flags │ Mon Sep 21                     │ Dir
   sort last in either direction. The arrow shows on the sorted date only;
   clicking it again flips, clicking another date switches days. Clicking the
   active column flips it; **shift-click** adds a tiebreaker. Names start A→Z,
-  totals largest-first.
+  totals largest-first. **Direct**, **Indirect**, **Admin** and **Gap** each
+  split into **Time** and **%** sub-columns, and each sub-header sorts on its
+  own: Time by duration, % by that type's share of direct + indirect + admin +
+  gap. An employee with nothing in that split sorts last in either direction.
 - **Collapse totals** — the » at the top-left of the totals hides them down
   to a slim strip, giving the timeline the width back; « brings them back at
   their previous width. The refresh button stays in the strip. Lasts for the
@@ -145,11 +148,11 @@ Employee        Expand all  │ Flags │ Mon Sep 21                     │ Dir
   while `isLoading` is true.
 - **Totals** — *Direct*, *Indirect*, *Admin*, *Gap*, *Break/Lunch* (break +
   lunch punches) and *Work* (punched work time). The first four split up the
-  work time, so only they show a share underneath: each one's percent of
-  Direct + Indirect + Admin + Gap.
+  work time, so only they get a **%** sub-column beside their **Time**: each
+  one's percent of Direct + Indirect + Admin + Gap.
   Each total's hours wear its type's text color — Direct, Indirect and Admin
   from *Job types* (`1`, `2`, `3`), Gap from the `Gap` type, Break/Lunch and
-  Work from the `Punch` type. Zero stays grey, and the share line stays grey.
+  Work from the `Punch` type. Zero keeps its color too; the % column stays grey.
 
 ## Days view
 
