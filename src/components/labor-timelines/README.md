@@ -68,7 +68,7 @@ accepted anywhere a value is expected.
 | `supervisorName` | Sub-line |
 | `timezone` | Row's now tick, only when its records have no timezone |
 | `directSeconds`, `indirectSeconds`, `adminSeconds`, `gapSeconds` | *Direct*, *Indirect*, *Admin*, *Gap* totals |
-| `breakPunchSeconds` + `lunchPunchSeconds` | *Break/Lunch* total |
+| `breakPunchSeconds` + `lunchPunchSeconds` | *B/L* total |
 | `workPunchSeconds` | *Work* total |
 | `flags[]` | Flag values (or `{ value, message }`) — icons in the Flags column, hover for label and message |
 | `canReset` | Shows the ↻ reset button |
@@ -97,13 +97,13 @@ raw value.
 ## Layout
 
 ```
-Employee        Expand all  │ Flags │ Mon Sep 21                     │    Direct     Indirect       Admin         Gap  Break/Lunch   Work
-                            │       │ 6a    9a    12p    3p    6p    │  Time    %    Time    %    Time    %    Time    %
-▸ Aaron Humphries  4277 ↻   │ ⚠️ ⏱️  │ ░[▓▓▓ Putaway ▓▓▓▓]░[▓▓]░      │ 6h 24m  82%  1h 10m  15%     0m   0%    12m   3%         45m 7h 46m
-  Marisa Miranda · Put Away │       │                                │
-▾ Matthew Harmon   3738     │       │  |==== work ====|              │     0m   –      0m   –  11h 24m  100%     0m   –         30m 11h 24m
-  Jason Rogers · Area Mgr   │       │  |==== work ===|=|             │
-                  Activity  │       │  |=== Admin ===|=|             │
+Employee        Expand all  │ ⚑  │ Mon Sep 21                     │   Direct    Indirect      Admin        Gap     B/L    Work
+                            │    │ 6a    9a    12p    3p    6p    │  Time  %    Time  %    Time  %    Time  %   Time  %    Time  %
+▸ Aaron Humphries  4277 ↻   │ ⚠️ ⏱️│ ░[▓▓▓ Putaway ▓▓▓▓]░[▓▓]░      │  6h 24m   1h 10m   0h 0m    0h 12m   0h 45m  7h 46m
+  Marisa Miranda · Put Away │    │                                │    82%      15%       0%        3%       –       –
+▾ Matthew Harmon   3738     │    │  |==== work ====|              │  0h 0m    0h 0m   11h 24m   0h 0m    0h 30m  11h 24m
+  Jason Rogers · Area Mgr   │    │  |==== work ===|=|             │
+                  Activity  │    │  |=== Admin ===|=|             │
 ```
 
 - **Bars** look the same collapsed or expanded. Break, lunch and meal records
@@ -119,44 +119,54 @@ Employee        Expand all  │ Flags │ Mon Sep 21                     │    
   sticks to the left edge of the timeline while its day is in view, so
   zooming into the middle of a day keeps it readable. Horizontal scroll and zoom are shared by every row.
 - **Resizable columns** — drag the inner edge of the name or totals column
-  (a line appears on hover). Names run 160–480px, totals 445–640px (552 by
-  default) with the six total columns scaling together — Break/Lunch a little
-  wider than the rest, and a 12px gap before each so values never touch; the timeline re-fits to what's
-  left. Double-click a handle to reset. Widths last for the session.
+  (a line appears on hover). Names run 160–480px. The totals drawer sizes
+  itself: each column is as wide as its longest total (so *4780h 22m* gets
+  room), plus a 16px gap before each so values never touch. That's also the
+  narrowest it can be; dragging only adds room, up to 640px, shared between
+  the columns. The timeline re-fits to what's left. Double-click a handle to
+  reset. Widths last for the session.
 - **Sort** — click **Employee**, **Flags**, a **date** in the axis,
-  **Direct**, **Indirect**, **Admin**, **Gap**, **Break/Lunch** or **Work**. Flags sorts by how many
+  **Direct**, **Indirect**, **Admin**, **Gap**, **B/L** or **Work**. Flags sorts by how many
   flags each employee has, most first. A date sorts by each employee's earliest
   *visible* start **on that day** (each log's local date), so the type/job
   filters decide what it means (Type = Punch → who clocked in first on that
   day); equal starts go shortest-first, and employees with nothing that day
   sort last in either direction. The arrow shows on the sorted date only;
   clicking it again flips, clicking another date switches days. Clicking the
-  active column flips it; **shift-click** adds a tiebreaker. Names start A→Z,
+  active column flips it, and a third click clears the sort (back to A→Z by
+  name); **shift-click** adds a tiebreaker, and cycles it the same way. Names start A→Z,
   totals largest-first. **Direct**, **Indirect**, **Admin** and **Gap** each
-  split into **Time** and **%** sub-columns, and each sub-header sorts on its
-  own: Time by duration, % by that type's share of direct + indirect + admin +
-  gap. An employee with nothing in that split sorts last in either direction.
+  stack their time over their % (the share of that split) in one column; the
+  header keeps **Time** and **%** side by side, and each sorts on its own: Time
+  by duration, % by that type's share of direct + indirect + admin + gap. An
+  employee with nothing in that split sorts last in either direction. **B/L**
+  and **Work** carry the same two sub-headers so the drawer lines up, but they
+  have no share: their **%** shows a dash and doesn't sort.
 - **Collapse totals** — the » at the top-left of the totals hides them down
   to a slim strip, giving the timeline the width back; « brings them back at
-  their previous width. The refresh button stays in the strip. Lasts for the
-  session.
-- **Expand all** — the switch above the names opens every expandable row.
+  their previous width. Lasts for the session.
+- **Expand all** — the button above the names opens every expandable row, and
+  reads **Collapse all** once they're all open. It's the same corner button in
+  every view; in Stacked it steps through the layers (see below).
 - **Today** — a blue dot before today's date, using the viewer's browser date.
-- **Footer** — pinned to the bottom: the number of employees shown, which
-  follows whatever the filtered data contains, and a ↻ button at the right
-  that fires the `refresh` event. The icon spins (and the button is disabled)
-  while `isLoading` is true.
-- **Totals** — *Direct*, *Indirect*, *Admin*, *Gap*, *Break/Lunch* (break +
+- **Footer** — pinned to the bottom: the view toggle at the left, the number
+  of employees shown (which follows whatever the filtered data contains) beside
+  the timeline, and the **Grand total** under the totals columns, in every
+  view. It adds up the shown employees (in Days view, their day pieces), so it
+  follows the filters.
+- **Totals** — *Direct*, *Indirect*, *Admin*, *Gap*, *B/L* (break +
   lunch punches) and *Work* (punched work time). The first four split up the
   work time, so only they get a **%** sub-column beside their **Time**: each
   one's percent of Direct + Indirect + Admin + Gap.
   Each total's hours wear its type's text color — Direct, Indirect and Admin
-  from *Job types* (`1`, `2`, `3`), Gap from the `Gap` type, Break/Lunch and
+  from *Job types* (`1`, `2`, `3`), Gap from the `Gap` type, B/L and
   Work from the `Punch` type. Zero keeps its color too; the % column stays grey.
+  A total column is left out when nobody shown has any time in it, and the
+  drawer gets narrower to match — down to just the » button when none have any.
 
 ## Days view
 
-The **Employees | Days** toggle in the footer turns the chart around. In
+The **Employees | Days | Stacked** toggle in the footer changes the layout (*Stacked* is described below). In
 *Employees*, each row is an employee and their days sit side by side across
 the timeline. In *Days*, each row is a day and the employees sit side by side
 — every employee gets a 12a–12a block, labelled in the top band where the
@@ -188,6 +198,44 @@ Wed Sep 23  │                               │     [▓▓▓▓▓]         
 - **Sort** — *Day* orders by date; the totals sort the days.
 - Switching views resets the zoom to fit, since the axes differ.
 
+## Stacked view
+
+*Stacked* groups by employee, then by day. Each employee gets a header row
+with their name, cargo ID, flags, reset and totals, and under it one row per
+day they worked. Every day sits on the same 12a–12a axis, so start times and
+shift lengths line up down the column.
+
+```
+Employee / Day     [Expand days]  │ Time of day                │ Direct …
+▾ Aaliyah Gordon 11633 ↻          │ Employee total · 3 days    │ 11h 15m
+    Mon, Aug 31                   │   [▓▓▓▓▓▓▓]                │  5h 30m
+    Tue, Sep 1                    │    [▓▓]                    │     —
+▾ Alejandro Villegas 9082         │ Employee total · 3 days    │ 17h 45m
+    Mon, Aug 31                   │  [▓▓▓▓▓▓▓]                 │  6h
+```
+
+- **Days** — only days with records get a row (days off are skipped), in date
+  order under each employee.
+- **Corner button** — steps through the layers each click: **Expand all** shows
+  every employee's days, **Expand days** opens every day's lanes, and
+  **Collapse all** folds everything back to the employee headers (and closes
+  the lanes). The label is the next step, worked out from what's showing, so
+  clicking a header or day by hand fits in. Click a header to fold one
+  employee, or a day to open its lanes.
+- **Zoom** — works as in Days view: zoom in on the 24 hours, never out past
+  them.
+- **Midnight, tooltips, tools** — a record crossing midnight is cut into one
+  piece per day with dashed edges, exactly as in Days view; tooltips and tools
+  describe the whole record.
+- **Totals** — a day row adds up that day's pieces, so it follows the filters.
+  A header shows the employee's own totals, which
+  stay full-range like in Employees view. With a filter on, the days under a
+  header can add up to less than the header.
+- **Sort** — sorts the employees, and the days under each one by the same
+  rule: a totals sort orders the days by that total, and the *Employee / Day*
+  sort orders them by date (flip it for newest first). Ties fall back to date
+  order. The date-label sort belongs to Employees view.
+
 ## Wall-clock alignment
 
 Each record is placed by its local clock reading at its own location, not its
@@ -214,11 +262,10 @@ array plus a record-specific `message`:
 
 **Employee flags** arrive the same way on `flags[]` and show as icons in their
 own **Flags** column, pinned between the names and the timeline — every one,
-`discrepancy` and `hasLockedLogs` included. The column fits every flag
-definition with `scope: 'employee'`, so its width (and the timeline's) never
-changes with the filters. Without scopes on the definitions it falls back to
-the most flags any shown employee has. Hover the
-icons for a tooltip listing each flag as `{icon} {label}: {message}`.
+`discrepancy` and `hasLockedLogs` included. The column is only as wide as the
+most flags any shown employee has, so it follows the filters (and hides when
+nobody shown has a flag). Its header is a flag icon, which sorts by flag count.
+Hover the icons for a tooltip listing each flag as `{icon} {label}: {message}`.
 
 ## Corrected assignments
 
@@ -247,12 +294,6 @@ explains why.
 |---|---|---|
 | `selectedEmployee` | state (object, hidden) | The employee whose reset was last clicked |
 | `reset` | event | Reset that employee |
-
-## Refresh
-
-| Retool name | Kind | What it is |
-|---|---|---|
-| `refresh` | event | The footer's ↻ was clicked — re-run the employees query |
 
 ## Log tools
 
@@ -311,7 +352,7 @@ event — handlers can read the state directly.
 | Hover a bar | Tooltip: employee, label, type, duration, start–end (to the second), assigned by, corrected, flags |
 | Click a bar | Open the log's tools menu |
 | Click a name | Expand / collapse that employee |
-| Click a header or date | Sort; click again to flip |
+| Click a header or date | Sort; click again to flip, a third time to clear |
 | Shift-click a header or date | Add / flip a secondary sort |
 | Drag a column edge | Resize the name or totals column; double-click to reset |
 | Pinch, or ⌘/ctrl + scroll | Zoom anchored at the cursor |

@@ -1,4 +1,4 @@
-import React, { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Retool } from '@tryretool/custom-component-support'
 import {
   ArrowPathIcon,
@@ -6,6 +6,7 @@ import {
   ChevronDoubleLeftIcon,
   ChevronDoubleRightIcon,
   ClockIcon,
+  FlagIcon,
   LockClosedIcon,
 } from '@heroicons/react/16/solid'
 
@@ -41,7 +42,7 @@ type Job = {
 // A flag definition from the flags array, plus a record-specific `message`.
 type FlagInfo = {
   value?: string | number | null
-  // 'employee' or 'record'; employee-scope definitions size the Flags column.
+  // 'employee' or 'record'.
   scope?: string | null
   label?: string | null
   caption?: string | null
@@ -193,6 +194,10 @@ type Row = {
   key: string
   // A day row's midnight on the wall-clock axis; null on employee rows.
   day: number | null
+  // Stacked view only: an employee's header or one of its days.
+  stack: 'header' | 'day' | null
+  // Stacked headers: the line shown across the timeline.
+  note: string | null
   cargoId: string
   sourceCargoId: string | number
   // The row label — the employee, or the date on a day row.
@@ -209,6 +214,8 @@ type Row = {
   raw: Retool.SerializableObject
   segments: Segment[]
 }
+
+type View = 'employees' | 'days' | 'stacked'
 
 type LaneLayout = { lane: Lane; rows: Segment[][]; top: number; height: number }
 
@@ -244,45 +251,40 @@ const MINUTE_MS = 60000
 const DAY_MS = 86400000
 const MIN_PX_PER_HOUR = 60
 // Direct–Gap split up the punched work time, so only those four get a share
-// sub-column next to their time (a share of their sum). Break/Lunch is break +
+// sub-column next to their time (a share of their sum). B/L is break +
 // lunch punches; Work is work punches.
-// `width` is the room each column's time needs at the default size: '11h 24m'
-// takes 48px, and the Break/Lunch header more. Resizing scales them together.
-// `colorOf` names the definition whose text color the total wears — Break/Lunch
+// `width` is the least room each column's time gets; a column whose longest
+// total is wider (like '4780h 22m') grows to fit it.
+// `colorOf` names the definition whose text color the total wears — B/L
 // and Work are punch time, so they wear the Punch type's.
 const TOTAL_COLUMNS = [
-  { key: 'direct', label: 'Direct', hasShare: true, width: 48, colorOf: { jobType: '1' } },
-  { key: 'indirect', label: 'Indirect', hasShare: true, width: 48, colorOf: { jobType: '2' } },
-  { key: 'admin', label: 'Admin', hasShare: true, width: 48, colorOf: { jobType: '3' } },
-  { key: 'gap', label: 'Gap', hasShare: true, width: 48, colorOf: { type: 'Gap' } },
-  { key: 'breaks', label: 'Break/Lunch', hasShare: false, width: 64, colorOf: { type: 'Punch' } },
-  { key: 'work', label: 'Work', hasShare: false, width: 48, colorOf: { type: 'Punch' } },
+  { key: 'direct', label: 'Direct', hasShare: true, width: 52, colorOf: { jobType: '1' } },
+  { key: 'indirect', label: 'Indirect', hasShare: true, width: 52, colorOf: { jobType: '2' } },
+  { key: 'admin', label: 'Admin', hasShare: true, width: 52, colorOf: { jobType: '3' } },
+  { key: 'gap', label: 'Gap', hasShare: true, width: 52, colorOf: { type: 'Gap' } },
+  { key: 'breaks', label: 'B/L', hasShare: false, width: 52, colorOf: { type: 'Punch' } },
+  { key: 'work', label: 'Work', hasShare: false, width: 52, colorOf: { type: 'Punch' } },
 ] as const
 
 type TotalKey = typeof TOTAL_COLUMNS[number]['key']
 type TotalColumn = typeof TOTAL_COLUMNS[number]
-// Room for '100%', and the space left of it.
-const SHARE_WIDTH = 32
-const SHARE_GAP = 8
-// How wide the right-aligned "Time" sub-label's text is at its 10px size; the
-// type label centers over the span from its left edge to the "%" label's right.
-const TIME_LABEL_WIDTH = 22
-const shareUnitsOf =(column: TotalColumn) => (column.hasShare ? SHARE_WIDTH + SHARE_GAP : 0)
+// The Time and % sub-labels sit side by side over a column that stacks the
+// two values; this is the space between them.
+const SUB_LABEL_GAP = 8
 // Space left of every column's text, so right-aligned values never run into
 // the column before them.
-const TOTAL_GAP = 12
+const TOTAL_GAP = 16
 // Name and totals columns are resizable by dragging their inner edge; these
 // are the defaults (restored by double-clicking a handle) and the limits.
 const DEFAULT_NAME_WIDTH = 240
 const MIN_NAME_WIDTH = 160
 const MAX_NAME_WIDTH = 480
 const TOTALS_PADDING = 16
-const TOTAL_COLUMNS_WIDTH = TOTAL_COLUMNS.reduce((sum, column) => sum + column.width + TOTAL_GAP + shareUnitsOf(column), 0)
-const DEFAULT_TOTALS_WIDTH = TOTAL_COLUMNS_WIDTH + TOTALS_PADDING
-const MIN_TOTALS_WIDTH = Math.round(TOTAL_COLUMNS_WIDTH * 0.8) + TOTALS_PADDING
+// The totals drawer is never narrower than its columns need (so it follows the
+// data); dragging only makes it roomier, up to this much.
 const MAX_TOTALS_WIDTH = 640
-// Collapsed, the totals shrink to a strip just wide enough for the expand and
-// refresh buttons.
+// Collapsed, the totals shrink to a strip just wide enough for the expand
+// button.
 const COLLAPSED_TOTALS_WIDTH = 28
 const RESIZE_HANDLE_WIDTH = 7
 // Name line: cell padding, then the chevron and its gap. The sub-line, the
@@ -294,9 +296,11 @@ const NAME_INDENT = CHEVRON_WIDTH + NAME_GAP
 const NAME_LINE_HEIGHT = 16
 // The flags column fits the most icons any shown employee has, and hides
 // when nobody has a flag.
-const FLAG_ICON_WIDTH = 16
-const FLAG_GAP = 4
-const MIN_FLAGS_WIDTH = 56
+const FLAG_ICON_WIDTH = 14
+const FLAG_GAP = 2
+const FLAGS_PADDING = 4
+// Room for the header's flag icon and its sort arrow.
+const MIN_FLAGS_WIDTH = 30
 const LANE_LABEL_WIDTH = 56
 const ROW_HEIGHT = 44
 const ROW_PADDING = 6
@@ -305,7 +309,7 @@ const LANE_GAP = 4
 const DAY_BAND = 14
 const HOUR_BAND = 16
 const AXIS_HEIGHT = DAY_BAND + HOUR_BAND
-const FOOTER_HEIGHT = 26
+const FOOTER_HEIGHT = 32
 const OVERSCAN_PX = 400
 // Horizontal scroll only re-renders once per step. It must stay under
 // OVERSCAN_PX, or a step could scroll past the drawn edge and show blanks.
@@ -335,6 +339,11 @@ const ZOOM_SENSITIVITY = 0.01
 const MAX_WHEEL_DELTA = 40
 
 const LANES: Lane[] = ['Shift', 'Punch', 'Activity']
+const VIEWS: { view: View; label: string; title: string }[] = [
+  { view: 'employees', label: 'Employees', title: 'A row per employee, their days side by side' },
+  { view: 'days', label: 'Days', title: 'A row per day, the employees side by side' },
+  { view: 'stacked', label: 'Stacked', title: "Each employee's days stacked on one 24-hour axis" },
+]
 const TICK_STEPS_MINUTES = [1, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440]
 const JOB_TYPES: Record<string, string> = { 1: 'Direct', 2: 'Indirect', 3: 'Admin' }
 // Names read A→Z first; totals read largest first, since the point of sorting
@@ -523,10 +532,18 @@ const formatDurationSeconds = (ms: number) => {
   return `${seconds}s`
 }
 
+let measureContext: CanvasRenderingContext2D | null | undefined
+// Rendered width of a total, measured in the font the cells use.
+const textWidth = (text: string) => {
+  measureContext ??= document.createElement('canvas').getContext('2d')
+  if (!measureContext) return text.length * 7
+  measureContext.font = '600 11px Inter, system-ui, sans-serif'
+  return Math.ceil(measureContext.measureText(text).width) + 2
+}
+
 const formatTotal = (seconds: number) => {
   const minutes = Math.round(Math.max(0, seconds) / 60)
-  const hours = Math.floor(minutes / 60)
-  return hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
 }
 
 /* =========================================================================
@@ -694,6 +711,8 @@ const toRow = (group: EmployeeGroup, lookups: Lookups): Row => {
   return {
     key: cargoId,
     day: null,
+    stack: null,
+    note: null,
     cargoId,
     sourceCargoId: group.cargoId,
     name: employeeName,
@@ -790,6 +809,8 @@ const toDayRows = (employees: Row[], range: Span | null, now: number) =>
     return {
       key: `day-${day}`,
       day,
+      stack: null,
+      note: null,
       cargoId: '',
       sourceCargoId: '',
       name: formatDay(day, WALL),
@@ -805,6 +826,59 @@ const toDayRows = (employees: Row[], range: Span | null, now: number) =>
       segments,
     }
   })
+
+/* =========================================================================
+   Stacked view: each employee's header row, then one row per day they worked,
+   every day on the same 12a–12a axis so start times line up down the column.
+   Days are cut at midnight like the Days view, and their totals are added up
+   from the pieces. The header keeps the employee's own totals.
+   ========================================================================= */
+
+const toStacked = (employees: Row[], now: number) => {
+  const groups = employees.map((employee) => {
+    const worked = new Set<number>()
+    employee.segments.forEach((segment) => {
+      const first = Math.floor(segment.wallStartMs / DAY_MS) * DAY_MS
+      const last = Math.ceil(wallEndAt(segment, now) / DAY_MS) * DAY_MS - DAY_MS
+      Array.from({ length: Math.max(Math.round((last - first) / DAY_MS) + 1, 0) }, (_, index) => first + index * DAY_MS)
+        .forEach((day) => worked.add(day))
+    })
+    const days = [...worked].sort((a, b) => a - b).flatMap((day): Row[] => {
+      const segments = employee.segments.flatMap((segment) => {
+        const piece = pieceOf(segment, day, 0, now)
+        return piece ? [{ ...piece, owner: employee }] : []
+      })
+      if (segments.length === 0) return []
+      return [{
+        key: `${employee.key}@${day}`,
+        day,
+        stack: 'day',
+        note: null,
+        cargoId: '',
+        sourceCargoId: '',
+        name: formatDay(day, WALL),
+        employeeName: '',
+        supervisorName: null,
+        jobTitle: null,
+        timeZone: employee.timeZone,
+        totals: dayTotalsOf(segments, now),
+        flags: [],
+        canReset: false,
+        isLocked: false,
+        raw: {},
+        segments,
+      }]
+    })
+    const header: Row = {
+      ...employee,
+      stack: 'header',
+      note: `Employee total \u00B7 ${days.length} ${days.length === 1 ? 'day' : 'days'}`,
+      segments: [],
+    }
+    return { header, days }
+  })
+  return { groups }
+}
 
 // Greedy interval packing: place each record in the first sub-row that is free
 // at its start time. A lane with no overlaps collapses to a single row.
@@ -924,21 +998,31 @@ const formatAssignedAt = (assignedAtMs: number, segment: Segment) => {
    if it's already in the list. Name always breaks remaining ties.
    ========================================================================= */
 
+const STACKED_STEPS = {
+  employees: { label: 'Expand all', title: 'Show every employee\u2019s days' },
+  days: { label: 'Expand days', title: 'Open every day\u2019s lanes' },
+  collapse: { label: 'Collapse all', title: 'Fold every employee shut' },
+} as const
+
 const flip = (direction: SortDirection): SortDirection => (direction === 'asc' ? 'desc' : 'asc')
 
-// Clicking the column already sorting flips it. For the start sort that means
-// the same date — a different date switches the sort to that day instead.
+// Clicking the column already sorting flips it, and clicking it again once
+// flipped clears it. For the start sort that means the same date — a different
+// date switches the sort to that day instead. With no rules left, rows fall
+// back to name order, A→Z.
 const nextSort = (rules: SortRule[], key: SortKey, additive: boolean, day?: number): SortRule[] => {
   const existing = rules.find((rule) => rule.key === key)
   const isSame = existing !== undefined && existing.day === day
+  const isFlipped = existing !== undefined && existing.direction !== DEFAULT_DIRECTION[key]
   if (additive) {
     if (!existing) return [...rules, { key, direction: DEFAULT_DIRECTION[key], day }]
+    if (isSame && isFlipped) return rules.filter((rule) => rule.key !== key)
     return rules.map((rule) => {
       if (rule.key !== key) return rule
       return isSame ? { ...rule, direction: flip(rule.direction) } : { key, direction: DEFAULT_DIRECTION[key], day }
     })
   }
-  if (existing && isSame && rules.length === 1) return [{ ...existing, direction: flip(existing.direction) }]
+  if (existing && isSame && rules.length === 1) return isFlipped ? [] : [{ ...existing, direction: flip(existing.direction) }]
   return [{ key, direction: DEFAULT_DIRECTION[key], day }]
 }
 
@@ -968,10 +1052,12 @@ const isShareSort = (key: SortKey): key is ShareSortKey => key in SHARE_SORT_KEY
 
 // A share sort orders by percentage of the split; a row with nothing to split
 // has no percentage, so it sorts last either way.
-const compareRows = (rules: SortRule[], firstOf: Map<string, FirstRecord>) => (a: Row, b: Row) => {
+// `nameOrder` is the row's own order for the Name sort and for ties: names for
+// employees, dates for the days nested under a stacked employee.
+const compareRows = (rules: SortRule[], firstOf: Map<string, FirstRecord>, nameOrder: (a: Row, b: Row) => number = byName) => (a: Row, b: Row) => {
   const orderBy = (rule: SortRule) => {
     const sign = rule.direction === 'asc' ? 1 : -1
-    if (rule.key === 'name') return sign * byName(a, b)
+    if (rule.key === 'name') return sign * nameOrder(a, b)
     if (rule.key === 'flags') return sign * (a.flags.length - b.flags.length)
     if (rule.key === 'start') {
       const first = firstOf.get(a.key)
@@ -989,7 +1075,7 @@ const compareRows = (rules: SortRule[], firstOf: Map<string, FirstRecord>) => (a
     return sign * (a.totals[rule.key] - b.totals[rule.key])
   }
   const decided = rules.map(orderBy).find((order) => order !== 0)
-  return decided ?? byName(a, b)
+  return decided ?? nameOrder(a, b)
 }
 
 const BROWSER_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -1091,13 +1177,6 @@ export const LaborTimelines = () => {
       : colorsOf(lookups.types.get(column.colorOf.type), column.colorOf.type).text,
   ])) as Record<TotalKey, string>, [lookups])
 
-  // How many employee flags exist, so the Flags column keeps one width no matter
-  // who's filtered in. Zero when the definitions carry no scope.
-  const flagSlots = useMemo(
-    () => [...lookups.flags.values()].filter((flag) => flag.scope === 'employee').length,
-    [lookups],
-  )
-
   const employeesKey = JSON.stringify(employees)
   // A cleared or still-loading binding arrives as '' rather than [].
   const rows = useMemo(() => (
@@ -1125,7 +1204,6 @@ export const LaborTimelines = () => {
     description: 'The employee whose reset button was most recently clicked (records excluded).',
   })
   const onReset = Retool.useEventCallback({ name: 'reset' })
-  const onRefresh = Retool.useEventCallback({ name: 'refresh' })
 
   const queueLogEvent = useFireAfterSync(selectedLog)
   const queueEmployeeEvent = useFireAfterSync(selectedEmployee)
@@ -1155,11 +1233,9 @@ export const LaborTimelines = () => {
       rows={rows}
       totalColors={totalColors}
       range={range}
-      flagSlots={flagSlots}
       isLoading={isLoading}
       onToolPick={onToolPick}
       onReset={onResetEmployee}
-      onRefresh={onRefresh}
     />
   )
 }
@@ -1176,14 +1252,12 @@ type ChartProps = {
   rows: Row[]
   totalColors: Record<TotalKey, string>
   range: Span | null
-  flagSlots: number
   isLoading: boolean
   onToolPick: (log: Retool.SerializableObject) => void
   onReset: (employee: Retool.SerializableObject) => void
-  onRefresh: () => void
 }
 
-const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onReset, onRefresh }: ChartProps) => {
+const Chart = ({ rows, totalColors, range, isLoading, onToolPick, onReset }: ChartProps) => {
   const hasOpenSegment = useMemo(
     () => rows.some((row) => row.segments.some((segment) => segment.endMs === null)),
     [rows],
@@ -1199,28 +1273,43 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
 
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  const [columns, setColumns] = useState({ name: DEFAULT_NAME_WIDTH, totals: DEFAULT_TOTALS_WIDTH })
+  const [columns, setColumns] = useState({ name: DEFAULT_NAME_WIDTH, totals: 0 })
   const [resize, setResize] = useState<{ column: 'name' | 'totals'; startX: number; startWidth: number } | null>(null)
   const [hoveredHandle, setHoveredHandle] = useState<'name' | 'totals' | null>(null)
   const [isTotalsCollapsed, setIsTotalsCollapsed] = useState(false)
   // Days: the Employees view turned around — a row per day, and across the
   // timeline every employee's 12a–12a side by side, the way days sit side by
   // side for an employee. Zoom, scroll and expand work exactly the same.
-  const [isDayMode, setIsDayMode] = useState(false)
+  // Stacked: each employee's days under a header row, all on one 12a–12a axis.
+  const [view, setView] = useState<View>('employees')
+  const isDayMode = view === 'days'
+  const isStacked = view === 'stacked'
   const nameWidth = columns.name
-  const totalsWidth = isTotalsCollapsed ? COLLAPSED_TOTALS_WIDTH : columns.totals
-  const scaledWidth = (units: number) => (units / TOTAL_COLUMNS_WIDTH) * (totalsWidth - TOTALS_PADDING)
-  const timeWidth = (column: TotalColumn) => scaledWidth(column.width + TOTAL_GAP)
-  const shareWidth = (column: TotalColumn) => scaledWidth(shareUnitsOf(column))
-  // Sized from the definitions when they say which flags are employee flags, so
-  // filtering never changes the column (and the timeline's width with it).
-  const maxFlags = useMemo(
-    () => flagSlots || rows.reduce((most, row) => Math.max(most, row.flags.length), 0),
-    [flagSlots, rows],
+  // A column nobody has any time in is left out, and the drawer shrinks with it.
+  // The stored width is for the full set, so resizing and the default stay put
+  // as columns come and go.
+  const totalColumns = useMemo(
+    () => TOTAL_COLUMNS.filter((column) => rows.some((row) => row.totals[column.key] > 0)),
+    [rows],
   )
+  // Each column is as wide as its longest total (the sum, which is never
+  // smaller than any row), so big numbers never crowd their neighbors.
+  const columnUnits = useMemo(() => Object.fromEntries(totalColumns.map((column) => {
+    const longest = formatTotal(rows.reduce((sum, row) => sum + row.totals[column.key], 0))
+    return [column.key, Math.max(column.width, textWidth(longest)) + TOTAL_GAP]
+  })) as Record<TotalKey, number>, [totalColumns, rows])
+  const visibleUnits = totalColumns.reduce((sum, column) => sum + columnUnits[column.key], 0)
+  const minTotalsWidth = visibleUnits + TOTALS_PADDING
+  // Dragging only adds room, shared out between the columns; 0 means as narrow as fits.
+  const expandedWidth = Math.min(Math.max(columns.totals, minTotalsWidth), Math.max(MAX_TOTALS_WIDTH, minTotalsWidth))
+  const totalsWidth = isTotalsCollapsed ? COLLAPSED_TOTALS_WIDTH : expandedWidth
+  const unitScale = visibleUnits > 0 ? (expandedWidth - TOTALS_PADDING) / visibleUnits : 1
+  const timeWidth = (column: TotalColumn) => columnUnits[column.key] * unitScale
+  // Fits the most flags any shown employee has, so it follows the filters.
+  const maxFlags = useMemo(() => rows.reduce((most, row) => Math.max(most, row.flags.length), 0), [rows])
   const flagsWidth = maxFlags === 0 || isDayMode
     ? 0
-    : Math.max(MIN_FLAGS_WIDTH, CELL_PADDING * 2 + maxFlags * FLAG_ICON_WIDTH + (maxFlags - 1) * FLAG_GAP)
+    : Math.max(MIN_FLAGS_WIDTH, FLAGS_PADDING * 2 + maxFlags * FLAG_ICON_WIDTH + (maxFlags - 1) * FLAG_GAP)
   // Everything pinned left of the timeline: the name column, then flags.
   const leftWidth = nameWidth + flagsWidth
   // The native wheel listener registers once, so it reads the width from a ref.
@@ -1236,7 +1325,7 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
         resize.column === 'name'
           ? { ...previous, name: clamp(resize.startWidth + delta, MIN_NAME_WIDTH, MAX_NAME_WIDTH) }
           // The totals handle sits on the column's left edge, so dragging left widens it.
-          : { ...previous, totals: clamp(resize.startWidth - delta, MIN_TOTALS_WIDTH, MAX_TOTALS_WIDTH) }
+          : { ...previous, totals: clamp(resize.startWidth - delta, minTotalsWidth, Math.max(MAX_TOTALS_WIDTH, minTotalsWidth)) }
       ))
     }
     const onUp = () => setResize(null)
@@ -1246,18 +1335,18 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [resize])
+  }, [resize, minTotalsWidth])
 
   const startResize = (column: 'name' | 'totals') => (event: React.MouseEvent) => {
     if (event.button !== 0) return
     event.preventDefault()
     setHovered(null)
-    setResize({ column, startX: event.clientX, startWidth: columns[column] })
+    setResize({ column, startX: event.clientX, startWidth: column === 'name' ? columns.name : expandedWidth })
   }
 
   const resetColumn = (column: 'name' | 'totals') => () => setColumns((previous) => ({
     ...previous,
-    [column]: column === 'name' ? DEFAULT_NAME_WIDTH : DEFAULT_TOTALS_WIDTH,
+    [column]: column === 'name' ? DEFAULT_NAME_WIDTH : 0,
   }))
   const [viewport, setViewport] = useState({ width: 0, height: 0 })
   const [scrollTop, setScrollTop] = useState(0)
@@ -1276,6 +1365,8 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
   }, [])
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+  // Stacked headers whose days are hidden.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const [sort, setSort] = useState<SortRule[]>([{ key: 'name', direction: 'asc' }])
   const toggle = (key: string) => setExpanded((previous) => {
     const next = new Set(previous)
@@ -1347,15 +1438,32 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
   // transformer against every record, so filtering never changes them.
   // In Days view the employees' blocks run across in name order.
   const dayRows = useMemo(() => (isDayMode ? toDayRows(rows, range, now) : []), [isDayMode, rows, range, now])
-  const shown = isDayMode ? dayRows : rows
+  const stacked = useMemo(() => (isStacked ? toStacked(rows, now) : null), [isStacked, rows, now])
+  const shown = useMemo(
+    () => (isDayMode ? dayRows : stacked ? stacked.groups.flatMap(({ header, days }) => [header, ...days]) : rows),
+    [isDayMode, dayRows, stacked, rows],
+  )
 
-  // The two views have different axes, so switching starts from fit-to-width.
-  const switchRows = (toDays: boolean) => {
-    if (toDays === isDayMode) return
+  // Days view adds up the day pieces; the others the employees' own totals.
+  const grandTotals = useMemo(
+    () => (isDayMode ? dayRows : rows).reduce((sum, row) => ({
+      work: sum.work + row.totals.work,
+      direct: sum.direct + row.totals.direct,
+      indirect: sum.indirect + row.totals.indirect,
+      admin: sum.admin + row.totals.admin,
+      gap: sum.gap + row.totals.gap,
+      breaks: sum.breaks + row.totals.breaks,
+    }), { work: 0, direct: 0, indirect: 0, admin: 0, gap: 0, breaks: 0 }),
+    [isDayMode, dayRows, rows],
+  )
+
+  // The views have different axes, so switching starts from fit-to-width.
+  const switchView = (next: View) => {
+    if (next === view) return
     pendingScrollRef.current = 0
     setZoom(1)
     setMenu(null)
-    setIsDayMode(toDays)
+    setView(next)
   }
 
   // Expanded rows only show lanes that some visible record uses, so filtering
@@ -1383,6 +1491,8 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
   const domain = useMemo(() => {
     // One 12a–12a block per employee.
     if (isDayMode) return { start: 0, end: Math.max(rows.length, 1) * DAY_MS }
+    // Every day is one 12a–12a.
+    if (isStacked) return { start: 0, end: DAY_MS }
     let earliest = Infinity
     let latest = -Infinity
     shown.forEach((row) => row.segments.forEach((segment) => {
@@ -1392,15 +1502,18 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
     const start = Math.min(Math.floor(earliest / DAY_MS) * DAY_MS, range?.start ?? Infinity)
     const end = Math.max(Math.ceil(latest / DAY_MS) * DAY_MS, range?.end ?? -Infinity, start + DAY_MS)
     return { start, end }
-  }, [shown, wallNow, range, isDayMode, rows.length])
+  }, [shown, wallNow, range, isDayMode, isStacked, rows.length])
 
   const dataHours = (domain.end - domain.start) / HOUR_MS
   const available = Math.max(Math.floor(viewport.width - leftWidth - totalsWidth), MIN_PX_PER_HOUR)
   // Zoom 1 fits the whole range to the width when it fits, otherwise falls
   // back to a fixed scale and scrolls.
   const basePxPerHour = Math.max(MIN_PX_PER_HOUR, available / dataHours)
-  // Days view stops at its blocks; there's nothing either side of them.
-  const minZoom = Math.min(1, available / Math.max(dataHours, isDayMode ? dataHours : MAX_VISIBLE_HOURS) / basePxPerHour)
+  // Days and Stacked stop at their blocks; there's nothing either side of them.
+  const minZoom = Math.min(
+    1,
+    available / Math.max(dataHours, isDayMode || isStacked ? dataHours : MAX_VISIBLE_HOURS) / basePxPerHour,
+  )
   const effectiveZoom = clampZoom(zoom, minZoom)
   const frame = frameFor(domain, available, basePxPerHour, effectiveZoom)
   const { pxPerHour } = frame
@@ -1433,6 +1546,44 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
     allExpanded ? new Set() : new Set([...previous, ...expandable])
   ))
 
+  const headerKeys = useMemo(() => stacked?.groups.map(({ header }) => header.key) ?? [], [stacked])
+  const allCollapsed = headerKeys.length > 0 && headerKeys.every((key) => collapsed.has(key))
+  const toggleCollapsed = (key: string) => setCollapsed((previous) => {
+    const next = new Set(previous)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    return next
+  })
+
+  // Stacked's one button steps through the layers: employees open (their days
+  // listed), then every day's lanes open, then everything folds shut. The next
+  // step comes from what's showing, so manual clicks on rows fold into it.
+  const stackedStep = allCollapsed
+    ? 'employees'
+    : (allExpanded || expandable.size === 0) && collapsed.size === 0 ? 'collapse' : 'days'
+  const stepAllStacked = () => {
+    if (stackedStep === 'employees') setCollapsed(new Set())
+    if (stackedStep === 'days') {
+      setCollapsed(new Set())
+      setExpanded(new Set(expandable))
+    }
+    if (stackedStep === 'collapse') {
+      setCollapsed(new Set(headerKeys))
+      setExpanded(new Set())
+    }
+  }
+
+  // The corner's one button: Stacked steps through the layers, the others
+  // open or close every expandable row.
+  const cornerAction = isStacked
+    ? { ...STACKED_STEPS[stackedStep], run: stepAllStacked, disabled: false }
+    : {
+      label: allExpanded ? 'Collapse all' : 'Expand all',
+      title: allExpanded ? 'Close every row\u2019s lanes' : 'Open every row\u2019s lanes',
+      run: toggleAll,
+      disabled: expandable.size === 0,
+    }
+
   const sorted = useMemo(() => {
     // Only records starting on the sorted day count (wall-clock day, so each
     // log's own local date). Among those sharing the earliest start, the
@@ -1452,8 +1603,17 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
         }, { start: Infinity, duration: Infinity }),
       ]]
     }))
-    return [...shown].sort(compareRows(sort, firstOf))
-  }, [shown, sort])
+    const compare = compareRows(sort, firstOf)
+    // Stacked sorts the employees, then each one's days by the same rules —
+    // the Name sort (and ties) put days in date order.
+    if (stacked) {
+      const compareDays = compareRows(sort, firstOf, (a, b) => (a.day ?? 0) - (b.day ?? 0))
+      return [...stacked.groups]
+        .sort((a, b) => compare(a.header, b.header))
+        .flatMap(({ header, days }) => [header, ...(collapsed.has(header.key) ? [] : [...days].sort(compareDays))])
+    }
+    return [...shown].sort(compare)
+  }, [shown, sort, stacked, collapsed])
 
   const layouts = useMemo(
     () => new Map(shown
@@ -1783,42 +1943,33 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
     width: Math.abs(drag.currentX - drag.startX),
   }
 
-  // Shared by both views' footers: the employee count with the
-  // Employees | Days toggle, and refresh.
-  const footerCount = (
-    <>
-      <span style={footerCountTextStyle}>
-        {rows.length} {rows.length === 1 ? 'employee' : 'employees'}
+  // One total's cell: the time, with its share of the split stacked beneath.
+  // B/L and Work have no share, but a dash holds the line so the times align.
+  const renderTotal = (column: TotalColumn, totals: Row['totals']) => (
+    <div key={column.key} style={{ ...totalCellStyle, ...totalValueStyle, width: timeWidth(column) }}>
+      <span style={{ color: totalColors[column.key] }}>{formatTotal(totals[column.key])}</span>
+      <span style={shareStyle}>
+        {column.hasShare ? formatShare(totals[column.key], sharedSeconds(totals)) : '\u2013'}
       </span>
-      <div role="radiogroup" aria-label="View" style={rowsToggleStyle}>
-        {[{ label: 'Employees', toDays: false }, { label: 'Days', toDays: true }].map((option) => (
-          <button
-            key={option.label}
-            type="button"
-            role="radio"
-            aria-checked={option.toDays === isDayMode}
-            onClick={() => switchRows(option.toDays)}
-            style={{ ...rowsToggleButtonStyle, ...(option.toDays === isDayMode ? rowsToggleActiveStyle : {}) }}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-    </>
+    </div>
   )
 
-  const refreshButton = (
-    <button
-      type="button"
-      title="Refresh"
-      disabled={isLoading}
-      onClick={onRefresh}
-      style={{ ...refreshStyle, cursor: isLoading ? 'default' : 'pointer' }}
-    >
-      <ArrowPathIcon
-        style={{ ...refreshIconStyle, animation: isLoading ? 'labor-timelines-spin 0.9s linear infinite' : undefined }}
-      />
-    </button>
+  const viewToggle = (
+    <div role="radiogroup" aria-label="View" style={rowsToggleStyle}>
+      {VIEWS.map((option) => (
+        <button
+          key={option.view}
+          type="button"
+          role="radio"
+          aria-checked={option.view === view}
+          title={option.title}
+          onClick={() => switchView(option.view)}
+          style={{ ...rowsToggleButtonStyle, ...(option.view === view ? rowsToggleActiveStyle : {}) }}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   )
 
   // Handles sit outside the scroll area so they stay on the column edges while
@@ -1845,24 +1996,24 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
         <div style={{ ...contentStyle, width: contentWidth }}>
           <div style={{ ...headerStyle, width: contentWidth }}>
             <div style={{ ...stickyLeftStyle, ...cornerStyle, width: nameWidth }}>
-              {sortHeader('name', isDayMode ? 'Day' : 'Employee', { ...parentHeaderStyle, paddingLeft: NAME_INDENT, height: DAY_BAND })}
-              <label style={{ ...expandAllStyle, opacity: expandable.size > 0 ? 1 : 0.4 }}>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={allExpanded}
-                  disabled={expandable.size === 0}
-                  onClick={toggleAll}
-                  style={{ ...switchStyle, background: allExpanded ? TODAY_COLOR : '#D9E2EC' }}
-                >
-                  <span style={{ ...switchKnobStyle, left: allExpanded ? 12 : 2 }} />
-                </button>
-                Expand all
-              </label>
+              {sortHeader(
+                'name',
+                isDayMode ? 'Day' : isStacked ? 'Employee / Day' : 'Employee',
+                { ...parentHeaderStyle, paddingLeft: NAME_INDENT, height: DAY_BAND },
+              )}
+              <button
+                type="button"
+                title={cornerAction.title}
+                disabled={cornerAction.disabled}
+                onClick={cornerAction.run}
+                style={{ ...cornerActionStyle, opacity: cornerAction.disabled ? 0.4 : 1, cursor: cornerAction.disabled ? 'default' : 'pointer' }}
+              >
+                {cornerAction.label}
+              </button>
             </div>
             {flagsWidth > 0 && (
               <div style={{ ...stickyLeftStyle, ...flagsHeaderStyle, left: nameWidth, width: flagsWidth }}>
-                {sortHeader('flags', 'Flags', { ...parentHeaderStyle, height: DAY_BAND })}
+                {sortHeader('flags', <FlagIcon style={flagHeaderIconStyle} />, { ...parentHeaderStyle, height: DAY_BAND }, 'flags', undefined, 'Flags')}
               </div>
             )}
             <div
@@ -1905,7 +2056,12 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
                   </div>
                 </div>
               ))}
-              {!isDayMode && dayLabels.map(({ day, left, width }) => (
+              {isStacked && (
+                <div style={{ ...labelBlockStyle, left: 0, width: trackWidth }}>
+                  <div style={{ ...dayLabelStyle, left: leftWidth, maxWidth: trackWidth }}>Time of day</div>
+                </div>
+              )}
+              {!isDayMode && !isStacked && dayLabels.map(({ day, left, width }) => (
                 <div key={`day-${day}`} style={{ ...labelBlockStyle, left, width }}>
                   {sortHeader(
                     'start',
@@ -1947,40 +2103,16 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
                 >
                   <ChevronDoubleRightIcon style={collapseIconStyle} />
                 </button>
-                {TOTAL_COLUMNS.map((column) => {
-                  if (!column.hasShare) {
-                    return sortHeader(column.key, column.label, {
-                      ...totalCellStyle,
-                      ...parentHeaderStyle,
-                      width: timeWidth(column),
-                      justifyContent: 'flex-end',
-                      height: DAY_BAND,
-                    })
-                  }
-                  const shareKey = `${column.key}Share` as const
+                {totalColumns.map((column) => {
                   return (
-                    <div key={column.key}>
-                      <div
-                        style={{
-                          ...totalGroupLabelStyle,
-                          width: timeWidth(column) + shareWidth(column),
-                          paddingLeft: Math.max(timeWidth(column) - TIME_LABEL_WIDTH, 0),
-                        }}
-                      >
-                        {column.label}
-                      </div>
-                      <div style={{ display: 'flex' }}>
-                        {sortHeader(column.key, 'Time', {
-                          ...totalCellStyle,
-                          ...totalSubLabelStyle,
-                          width: timeWidth(column),
-                        }, column.key, undefined, `${column.label} time`)}
-                        {sortHeader(shareKey, '%', {
-                          ...totalCellStyle,
-                          ...totalSubLabelStyle,
-                          width: shareWidth(column),
-                          paddingLeft: SHARE_GAP,
-                        }, shareKey, undefined, `${column.label} percentage`)}
+                    <div key={column.key} style={{ width: timeWidth(column) }}>
+                      <div style={totalGroupLabelStyle}>{column.label}</div>
+                      <div style={totalSubLabelsStyle}>
+                        {sortHeader(column.key, 'Time', totalSubLabelStyle, column.key, undefined, `${column.label} time`)}
+                        {column.hasShare
+                          ? sortHeader(`${column.key}Share`, '%', totalSubLabelStyle, `${column.key}Share`, undefined, `${column.label} percentage`)
+                          // B/L and Work have no share; the label keeps the headers uniform.
+                          : <div style={{ ...totalSubLabelStyle, display: 'flex', alignItems: 'center' }}>%</div>}
                       </div>
                     </div>
                   )
@@ -2011,42 +2143,47 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
               const height = heightOf(row)
               const lanes = layouts.get(row.key)
               // A day row shows "now" in each employee's block, but only on today.
+              // A stacked day shows it once, at the employee's local time.
               const rowDay = row.day
-              const nowTicks = rowDay === null
-                ? [wallNow.get(row.timeZone) ?? toWall(now, row.timeZone)]
-                : rows.map((employee, blockIndex) => toWall(now, employee.timeZone) - rowDay + blockIndex * DAY_MS)
-                  .filter((tick, blockIndex) => tick >= blockIndex * DAY_MS && tick < (blockIndex + 1) * DAY_MS)
+              const nowTicks = row.stack === 'header' || (row.stack === 'day' && rowDay === null)
+                ? []
+                : row.stack === 'day' && rowDay !== null
+                  ? [toWall(now, row.timeZone) - rowDay].filter((tick) => tick >= 0 && tick < DAY_MS)
+                  : rowDay === null
+                    ? [wallNow.get(row.timeZone) ?? toWall(now, row.timeZone)]
+                    : rows.map((employee, blockIndex) => toWall(now, employee.timeZone) - rowDay + blockIndex * DAY_MS)
+                      .filter((tick, blockIndex) => tick >= blockIndex * DAY_MS && tick < (blockIndex + 1) * DAY_MS)
+              const isHeader = row.stack === 'header'
+              const tint = isHeader ? { background: '#F0F4F8' } : undefined
+              const isClickable = isHeader || expandable.has(row.key)
               return (
-                <div key={row.key} style={{ ...rowStyle, top, height, width: contentWidth }}>
+                <div key={row.key} style={{ ...rowStyle, ...tint, top, height, width: contentWidth }}>
                   <div
-                    onClick={expandable.has(row.key) ? () => toggle(row.key) : undefined}
+                    onClick={isHeader ? () => toggleCollapsed(row.key) : expandable.has(row.key) ? () => toggle(row.key) : undefined}
                     onMouseDown={(event) => event.stopPropagation()}
                     style={{
                       ...stickyLeftStyle,
                       ...nameCellStyle,
+                      ...tint,
                       width: nameWidth,
-                      cursor: expandable.has(row.key) ? 'pointer' : 'default',
+                      cursor: isClickable ? 'pointer' : 'default',
                     }}
                   >
-                    <div style={{ ...nameBlockStyle, justifyContent: lanes ? 'flex-start' : 'center', paddingTop: lanes ? ROW_PADDING + 2 : 0 }}>
+                    <div
+                      style={{
+                        ...nameBlockStyle,
+                        justifyContent: lanes ? 'flex-start' : 'center',
+                        paddingTop: lanes ? ROW_PADDING + 2 : 0,
+                        paddingLeft: row.stack === 'day' ? NAME_INDENT : 0,
+                      }}
+                    >
                       <div style={nameLineStyle}>
-                        <span style={chevronStyle}>{expandable.has(row.key) && (lanes ? '▾' : '▸')}</span>
+                        <span style={chevronStyle}>
+                          {isHeader ? (collapsed.has(row.key) ? '▸' : '▾') : expandable.has(row.key) && (lanes ? '▾' : '▸')}
+                        </span>
                         {row.day === today && <span style={todayDotStyle} />}
                         <span style={nameTextStyle}>{row.name}</span>
-                        {row.day === null && <span style={pillStyle}>{row.cargoId}</span>}
-                        {row.canReset && (
-                          <button
-                            type="button"
-                            title="Reset"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              onReset(employeePayload(row))
-                            }}
-                            style={resetStyle}
-                          >
-                            <ArrowPathIcon style={resetIconStyle} />
-                          </button>
-                        )}
+                        {row.day === null && row.cargoId !== '' && <span style={pillStyle}>{row.cargoId}</span>}
                       </div>
                       {row.day === null && (
                         <div style={subLineStyle}>
@@ -2054,6 +2191,19 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
                         </div>
                       )}
                     </div>
+                    {row.canReset && (
+                      <button
+                        type="button"
+                        title="Reset"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onReset(employeePayload(row))
+                        }}
+                        style={{ ...rowResetStyle, alignSelf: lanes ? 'flex-start' : 'center', marginTop: lanes ? ROW_PADDING + 2 : 0 }}
+                      >
+                        <ArrowPathIcon style={resetIconStyle} />
+                      </button>
+                    )}
                     {lanes && (
                       <div style={{ position: 'relative', width: LANE_LABEL_WIDTH, flex: '0 0 auto' }}>
                         {lanes.map((lane) => (
@@ -2074,6 +2224,7 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
                       style={{
                         ...stickyLeftStyle,
                         ...flagsCellStyle,
+                        ...tint,
                         left: nameWidth,
                         width: flagsWidth,
                         alignItems: lanes ? 'flex-start' : 'center',
@@ -2098,6 +2249,7 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
                   )}
 
                   <div style={{ position: 'relative', width: trackWidth, height: '100%', flex: '0 0 auto' }}>
+                    {row.note && <div style={{ ...rowNoteStyle, left: leftWidth }}>{row.note}</div>}
                     {lanes ? renderExpanded(row, lanes) : renderCompact(row)}
                     {nowTicks
                       .filter((tick) => tick >= frame.start && tick <= frame.end && isDrawnX(xOf(tick)))
@@ -2109,28 +2261,13 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
                     style={{
                       ...stickyRightStyle,
                       ...totalsCellStyle,
+                      ...tint,
                       width: totalsWidth,
                       alignItems: lanes ? 'flex-start' : 'center',
                       paddingTop: lanes ? ROW_PADDING + 2 : 0,
                     }}
                   >
-                    {!isTotalsCollapsed && TOTAL_COLUMNS.map((column) => {
-                      const seconds = row.totals[column.key]
-                      return (
-                        <Fragment key={column.key}>
-                          <div
-                            style={{ ...totalCellStyle, width: timeWidth(column), color: totalColors[column.key] }}
-                          >
-                            {formatTotal(seconds)}
-                          </div>
-                          {column.hasShare && (
-                            <div style={{ ...totalCellStyle, ...shareStyle, width: shareWidth(column), paddingLeft: SHARE_GAP }}>
-                              {formatShare(seconds, sharedSeconds(row.totals))}
-                            </div>
-                          )}
-                        </Fragment>
-                      )
-                    })}
+                    {!isTotalsCollapsed && totalColumns.map((column) => renderTotal(column, row.totals))}
                   </div>
                 </div>
               )
@@ -2144,22 +2281,29 @@ const Chart = ({ rows, totalColors, range, flagSlots, isLoading, onToolPick, onR
           <div style={{ flex: '1 1 auto' }} />
 
           <div style={{ ...footerStyle, width: contentWidth }}>
-            <div style={{ ...stickyLeftStyle, ...footerCountStyle, width: nameWidth }}>
-              {footerCount}
-            </div>
+            <div style={{ ...stickyLeftStyle, ...footerViewStyle, width: nameWidth }}>{viewToggle}</div>
             {flagsWidth > 0 && (
               <div style={{ ...stickyLeftStyle, ...footerFlagsStyle, left: nameWidth, width: flagsWidth }} />
             )}
-            <div style={{ flex: '0 0 auto', width: trackWidth }} />
+            <div style={{ ...footerTrackStyle, width: trackWidth }}>
+              <span style={{ ...footerLabelStyle, left: leftWidth }}>
+                {rows.length} {rows.length === 1 ? 'employee' : 'employees'}
+              </span>
+              <span style={{ ...footerLabelStyle, right: totalsWidth, marginLeft: 'auto', color: '#243B53', fontWeight: 600 }}>
+                Grand total
+              </span>
+            </div>
             <div
               style={{
                 ...stickyRightStyle,
-                ...footerActionsStyle,
+                ...totalsCellStyle,
                 ...(isTotalsCollapsed ? collapsedTotalsStyle : {}),
                 width: totalsWidth,
+                alignItems: 'center',
+                fontWeight: 600,
               }}
             >
-              {refreshButton}
+              {!isTotalsCollapsed && totalColumns.map((column) => renderTotal(column, grandTotals))}
             </div>
           </div>
         </div>
@@ -2302,9 +2446,6 @@ const resizeLineStyle: CSSProperties = {
 const LOADING_KEYFRAMES = `@keyframes labor-timelines-loading {
   from { left: -35%; }
   to { left: 100%; }
-}
-@keyframes labor-timelines-spin {
-  to { transform: rotate(360deg); }
 }`
 
 const loadingTrackStyle: CSSProperties = {
@@ -2359,8 +2500,8 @@ const contentStyle: CSSProperties = {
   flexDirection: 'column',
 }
 
-// Pinned to the bottom like the header is to the top, so the count stays in
-// view while rows scroll.
+// Pinned to the bottom like the header is to the top, so the count and grand total stay
+// in view while rows scroll.
 const footerStyle: CSSProperties = {
   position: 'sticky',
   bottom: 0,
@@ -2371,23 +2512,27 @@ const footerStyle: CSSProperties = {
   borderTop: '1px solid #E4E7EB',
 }
 
-const footerCountStyle: CSSProperties = {
+const footerViewStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 8,
   // Lines up with the employee names.
   paddingLeft: CELL_PADDING + NAME_INDENT,
-  paddingRight: CELL_PADDING - 4,
-  color: '#829AB1',
-  fontWeight: 500,
   borderRight: '1px solid #E4E7EB',
 }
 
-const footerCountTextStyle: CSSProperties = {
-  minWidth: 0,
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
+// The room between the name and totals columns holds the count and the total's
+// label; both are sticky so they stay beside their columns while scrolled.
+const footerTrackStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  flex: '0 0 auto',
+}
+
+const footerLabelStyle: CSSProperties = {
+  position: 'sticky',
+  padding: `0 ${CELL_PADDING}px`,
+  color: '#829AB1',
+  fontWeight: 500,
   whiteSpace: 'nowrap',
 }
 
@@ -2418,15 +2563,6 @@ const rowsToggleActiveStyle: CSSProperties = {
   boxShadow: '0 1px 1px rgba(0,0,0,0.08)',
 }
 
-const footerActionsStyle: CSSProperties = {
-  alignItems: 'center',
-  justifyContent: 'flex-end',
-  // The button's own inset makes up the difference, so the icon's edge lines
-  // up with the totals above it.
-  paddingRight: CELL_PADDING - 4,
-  borderLeft: '1px solid #E4E7EB',
-}
-
 const footerFlagsStyle: CSSProperties = {
   borderRight: '1px solid #E4E7EB',
 }
@@ -2454,24 +2590,6 @@ const collapseToggleStyle: CSSProperties = {
 const collapseIconStyle: CSSProperties = {
   width: 12,
   height: 12,
-}
-
-const refreshStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: 20,
-  height: 20,
-  padding: 0,
-  border: 'none',
-  borderRadius: 4,
-  background: 'transparent',
-  color: '#627D98',
-}
-
-const refreshIconStyle: CSSProperties = {
-  width: 14,
-  height: 14,
 }
 
 const headerStyle: CSSProperties = {
@@ -2522,8 +2640,8 @@ const cornerStyle: CSSProperties = {
 const flagsHeaderStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
-  paddingLeft: CELL_PADDING,
-  paddingRight: CELL_PADDING,
+  paddingLeft: FLAGS_PADDING,
+  paddingRight: FLAGS_PADDING,
   borderRight: '1px solid #E4E7EB',
 }
 
@@ -2557,37 +2675,31 @@ const sortIndexStyle: CSSProperties = {
   marginLeft: 2,
 }
 
-const expandAllStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
+const cornerActionStyle: CSSProperties = {
   height: DAY_BAND,
-  gap: 4,
+  padding: 0,
+  border: 'none',
+  background: 'transparent',
   color: '#829AB1',
+  font: 'inherit',
   fontSize: 11,
   fontWeight: 500,
   whiteSpace: 'nowrap',
   cursor: 'pointer',
 }
 
-const switchStyle: CSSProperties = {
-  position: 'relative',
-  width: 22,
-  height: 12,
-  padding: 0,
-  border: 'none',
-  borderRadius: 6,
-  cursor: 'inherit',
-  transition: 'background 120ms',
-}
-
-const switchKnobStyle: CSSProperties = {
-  position: 'absolute',
-  top: 2,
-  width: 8,
-  height: 8,
-  borderRadius: '50%',
-  background: '#FFFFFF',
-  transition: 'left 120ms',
+// Header rows have no bars, so a line of text sits in the
+// timeline and sticks just right of the pinned columns like the axis labels.
+const rowNoteStyle: CSSProperties = {
+  position: 'sticky',
+  width: 'max-content',
+  height: '100%',
+  display: 'flex',
+  alignItems: 'center',
+  paddingLeft: 4,
+  color: '#829AB1',
+  whiteSpace: 'nowrap',
+  pointerEvents: 'none',
 }
 
 const todayDotStyle: CSSProperties = {
@@ -2636,8 +2748,8 @@ const nameCellStyle: CSSProperties = {
 const flagsCellStyle: CSSProperties = {
   display: 'flex',
   height: '100%',
-  paddingLeft: CELL_PADDING,
-  paddingRight: CELL_PADDING,
+  paddingLeft: FLAGS_PADDING,
+  paddingRight: FLAGS_PADDING,
   borderRight: '1px solid #E4E7EB',
 }
 
@@ -2885,6 +2997,13 @@ const resetStyle: CSSProperties = {
   cursor: 'pointer',
 }
 
+// Sits at the right edge of the name column, a cell padding's worth (less the
+// button's own inset) before the divider.
+const rowResetStyle: CSSProperties = {
+  ...resetStyle,
+  marginRight: CELL_PADDING - 2,
+}
+
 const employeeFlagsStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -2893,6 +3012,12 @@ const employeeFlagsStyle: CSSProperties = {
   fontSize: 12,
   lineHeight: 1,
   cursor: 'default',
+}
+
+const flagHeaderIconStyle: CSSProperties = {
+  width: 12,
+  height: 12,
+  display: 'block',
 }
 
 const flagIconStyle: CSSProperties = {
@@ -2905,17 +3030,20 @@ const resetIconStyle: CSSProperties = {
   height: 12,
 }
 
-// Spans a type's Time and % sub-columns. The sub-labels are right-aligned, so
-// the label is centered over where their text sits (see TIME_LABEL_WIDTH),
-// not over the cells' full widths.
+// Over a column that stacks its time and %: right-aligned like the values.
 const totalGroupLabelStyle: CSSProperties = {
   ...parentHeaderStyle,
   display: 'flex',
-  boxSizing: 'border-box',
   alignItems: 'center',
-  justifyContent: 'center',
+  justifyContent: 'flex-end',
   height: DAY_BAND,
   whiteSpace: 'nowrap',
+}
+
+const totalSubLabelsStyle: CSSProperties = {
+  display: 'flex',
+  justifyContent: 'flex-end',
+  gap: SUB_LABEL_GAP,
 }
 
 // Sub-column headers (Time, %): the same weight and color on every one, a
@@ -2926,6 +3054,13 @@ const totalSubLabelStyle: CSSProperties = {
   fontSize: 10,
   fontWeight: 500,
   color: '#829AB1',
+}
+
+const totalValueStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'flex-end',
+  lineHeight: '14px',
 }
 
 const shareStyle: CSSProperties = {
